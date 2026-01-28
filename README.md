@@ -1,7 +1,7 @@
-# Wobsite
+# shost
 
-An HTTP server written in Inko, for hosting static websites such as [my personal
-website](https://yorickpeterse.com/) or the [Inko
+An HTTP server written in Inko, for self-hosting static websites such as [my
+personal website](https://yorickpeterse.com/) or the [Inko
 manual](https://docs.inko-lang.org/manual/main/).
 
 ## Requirements

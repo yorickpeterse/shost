@@ -1,0 +1,179 @@
+import std.bytes (Slice)
+import std.clone (Clone)
+import std.fs.path (Path)
+import std.int (Format)
+import std.net.http.server (Directory)
+import std.net.ip (IpAddress)
+import std.net.tls (ServerConfig)
+import std.sync (AtomicInt)
+
+# The default directory containing the websites to serve.
+#
+# This constant is public such that it may be adjusted at compile-time.
+let pub SITES = '/var/lib/shost'
+
+# The default port number to use when not using TLS.
+#
+# This constant is public such that it may be adjusted at compile-time.
+let pub PORT = 80
+
+# The default port number to use when using TLS.
+#
+# This constant is public such that it may be adjusted at compile-time.
+let pub TLS_PORT = 443
+
+# A type that tracks the global and local configuration versions.
+#
+# To handle configuration reloads we track a global version number that is
+# incremented each time the configuration is reloaded. Processes that maintain a
+# local copy of the configuration (e.g. the request handlers) can then compare
+# this global version with their local version and reload their configuration
+# accordingly.
+type Version {
+  # The global configuration version shared by all instances of this type.
+  let @global: AtomicInt
+
+  # The configuration version local to the owner of this `Version`.
+  let mut @local: Int
+
+  fn static new -> Self {
+    Self(global: AtomicInt.new(0), local: 0)
+  }
+
+  fn mut updated? -> Bool {
+    let global = @global.load
+
+    if global == @local {
+      false
+    } else {
+      @local = global
+      true
+    }
+  }
+}
+
+impl Clone for Version {
+  fn pub clone -> Self {
+    Self(global: @global, local: @local)
+  }
+}
+
+# The path to the directory containing the websites to serve.
+type inline Sites {
+  let @path: Path
+
+  fn static new -> Self {
+    Self(SITES.to_path)
+  }
+
+  fn load -> Result[Map[Slice[String], Directory], String] {
+    let map = Map.new
+    let iter = try @path.list.map_error(fn (e) {
+      'failed to list the sites in ${@path}: ${e}'
+    })
+
+    for entry in iter {
+      let Ok({ @path = path, @type = Directory }) = entry else next
+      let path = path.expand.or(path)
+
+      # For the key we use a Slice of a new String so we don't have to keep the
+      # whole file path around.
+      map.set(path.tail.to_string.to_slice, Directory.new(path))
+    }
+
+    Result.Ok(map)
+  }
+}
+
+impl Clone for Sites {
+  fn pub clone -> Self {
+    Self(@path.clone)
+  }
+}
+
+# The configuration settings to use when serving websites.
+type Config {
+  let @version: Version
+
+  # The directory containing the websites to serve.
+  let mut @sites: Sites
+
+  # The directory containing the TLS certificates and private keys to use.
+  #
+  # If set to an `Option.None` the use of TLS is disabled.
+  let mut @tls: Option[Path]
+
+  # The IP address to bind to.
+  let mut @ip: IpAddress
+
+  # The port number to use.
+  let mut @port: Int
+
+  # If timestamps should be included in log entries.
+  let mut @log_timestamps: Bool
+
+  # If request logging should be enabled or not.
+  let mut @log_requests: Bool
+
+  fn static new -> Self {
+    Self(
+      version: Version.new,
+      sites: Sites.new,
+      ip: IpAddress.v4(0, 0, 0, 0),
+      port: PORT,
+      tls: Option.None,
+      log_timestamps: true,
+      log_requests: true,
+    )
+  }
+
+  fn mut sites=(value: Path) {
+    @sites = Sites(value)
+  }
+
+  fn mut tls=(value: Path) {
+    @tls = Option.Some(value)
+    @port = TLS_PORT
+  }
+
+  fn mut parse_ip(ip: String) -> Result[Nil, String] {
+    let Some(v) = IpAddress.parse(ip) else throw "the IP '${ip}' is invalid"
+
+    @ip = v
+    Result.Ok(nil)
+  }
+
+  fn mut parse_port(port: String) -> Result[Nil, String] {
+    let Some(v) = Int.parse(port, Format.Decimal) else {
+      throw "the port '${port}' is invalid"
+    }
+
+    @port = v
+    Result.Ok(nil)
+  }
+
+  fn load_tls -> Result[Option[Map[String, ServerConfig]], String] {
+    let Some(dir) = @tls else return Result.Ok(Option.None)
+    let map = Map.new
+    let iter = try dir.list.map_error(fn (e) {
+      'failed to list the sites in ${dir}: ${e}'
+    })
+
+    for entry in iter {
+      let Ok({ @path = path, @type = Directory }) = entry else next
+      let cert = path.join('cert.pem')
+      let key = path.join('key.pem')
+
+      if !cert.file? or !key.file? { next }
+
+      let conf = match ServerConfig.builder.from_files(cert, key) {
+        case Ok(v) -> v
+        case Error(e) -> throw 'failed to load the TLS data for ${path}: ${e}'
+      }
+
+      map.set(path.tail.to_string, conf)
+    }
+
+    Result.Ok(Option.Some(map))
+  }
+}

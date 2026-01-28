@@ -1,0 +1,184 @@
+import shost.config (Config, Sites, Version)
+import std.bytes (Slice)
+import std.fs.path (Path)
+import std.net.http (Header, Status)
+import std.net.http.server (
+  Directory, Get, Handle, Head, Logger, Request, Response, Server,
+  compress_response,
+)
+import std.sync (Promise)
+
+fn start(config: Config) -> Result[Nil, String] {
+  let sites = try config.sites.load
+  let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
+  let logger = if config.log_requests and config.log_timestamps {
+    Logger.new
+  } else if config.log_requests {
+    Logger.new.without_timestamps
+  } else {
+    Logger.new.disabled
+  }
+
+  let srv = Server.new(fn {
+    recover {
+      Handler(
+        hosts: hosts,
+        sites: sites.clone,
+        version: config.version.clone,
+        logger: logger.clone,
+      )
+    }
+  })
+
+  match try config.load_tls {
+    case Some(v) -> {
+      # let conf = config.clone
+
+      srv.dynamic_tls(fn move (host) {
+        # TODO
+        Option.None
+      })
+    }
+    case _ -> {}
+  }
+
+  match srv.start_ip(config.ip, config.port) {
+    case Ok(_) -> Result.Ok(nil)
+    case Error(e) -> {
+      Result.Error('encountered an unexpected error in the accept loop: ${e}')
+    }
+  }
+
+  Result.Ok(nil)
+}
+
+# A process used for reloading the hosts configuration and propagating it across
+# active connections.
+#
+# When the configuration needs to be refreshed we don't want thousands/tens of
+# thousands of active connections to start hitting the file system. In addition,
+# if there's an error with the new configuration we only want a single message
+# printed instead of many.
+#
+# To ensure this is the case, the `Hosts` process is in charge of loading the
+# list of new websites to serve. Active connections may then request a copy of
+# this data when necessary.
+type async Hosts {
+  # The path to the directory containing the websites to serve.
+  let @path: Sites
+
+  # The currently enabled websites.
+  let mut @sites: Map[Slice[String], Directory]
+
+  fn static new(
+    path: uni Sites,
+    sites: uni Map[Slice[String], Directory],
+  ) -> Self {
+    Self(path: path, sites: sites)
+  }
+
+  fn async mut reload {
+    # The list of sites is obtained through a simple directory listing. If this
+    # fails it means the directory either doesn't exist or we don't have
+    # permissions to access it, in which case existing requests will start
+    # failing also.
+    #
+    # To detect such cases, we panic loudly instead of just printing a warning
+    # that will likely just be lost in the sea of logs.
+    @sites = @path.load.or_panic
+  }
+
+  fn async get(promise: uni Promise[Map[Slice[String], Directory]]) {
+    promise.set(recover @sites.clone)
+  }
+}
+
+# A type for handling requests, created for each HTTP connection.
+type Handler {
+  # The process to use for reloading the list of enabled websites.
+  let @hosts: Hosts
+
+  # The mapping of hostnames to a `Directory` used to serve corresponding
+  # requests.
+  let mut @sites: Map[Slice[String], Directory]
+
+  # The configuration version this connection is using.
+  let @version: Version
+  let @logger: Logger
+
+  fn mut reload_config {
+    if @version.updated? { @sites = await @hosts.get }
+  }
+
+  fn static_file(request: mut Request) -> Response {
+    let (host, _) = request.host
+    let Ok(dir) = @sites.get(host) else return Response.bad_request
+    let mut res = dir.handle(request, request.path.to_slice)
+
+    if res.status.not_found? {
+      match dir.path.join_strict('404.html') {
+        case Some(v) -> res = dir.file(request, v).status(Status.not_found)
+        case _ -> {}
+      }
+    }
+
+    res.header(Header.access_control_allow_origin, '*')
+  }
+
+  fn bad_bot?(request: ref Request) -> Bool {
+    # If a client can't be bothered identifying themselves, they're almost
+    # certainly a bad bot.
+    let ua = match request.headers.get(Header.user_agent) {
+      case Ok(v) if v.size > 0 -> v
+      case _ -> return true
+    }
+
+    # Real browsers these days send the Sec-Fetch-Site header, except for
+    # Firefox when reloading a page in reader mode. This check should hopefully
+    # catch clients pretending to be browsers when they're clearly not.
+    #
+    # Googlebot (and possibly other search crawlers) also starts its UA with
+    # "Mozilla" but doesn't pass these headers, but does include a URL. We allow
+    # such cases because at least the client gives us something to be identified
+    # with.
+    if
+      ua.starts_with?('Mozilla')
+        and !ua.contains?('://')
+        and request.headers.get(Header.sec_fetch_site).error?
+        and request.headers.get(Header.new('sec-gpc')).error?
+    {
+      return true
+    }
+
+    # We're serving static files and not PHP scripts, so clients requesting
+    # those are likely bots scanning for vulnerabilities.
+    match request.target.last {
+      case Some(v) if v.ends_with?('.php') -> return true
+      case _ -> {}
+    }
+
+    false
+  }
+}
+
+impl Handle for Handler {
+  fn pub mut handle(request: mut Request) -> Response {
+    reload_config
+
+    match request.method {
+      case Get or Head -> {}
+      case _ -> return Response.only_allow([Get, Head])
+    }
+
+    # This is just a simple heuristic for blocking clients that are just
+    # painfully obvious useless bots.
+    if bad_bot?(request) { return Response.forbidden }
+
+    compress_response(request, static_file(request))
+  }
+
+  fn pub mut response(request: mut Request, response: Response) -> Response {
+    @logger.log(request, response)
+    response
+  }
+}

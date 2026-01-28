@@ -1,0 +1,144 @@
+import helpers (fixtures)
+import shost.config (Config, PORT, SITES, Sites, TLS_PORT, Version)
+import std.net.ip (IpAddress)
+import std.test (Tests)
+
+fn config -> Config {
+  let cfg = Config.new
+
+  cfg.sites = fixtures.join('sites')
+  cfg.tls = fixtures.join('tls')
+  cfg
+}
+
+fn pub tests(t: mut Tests) {
+  t.test('Version.new', fn (t) {
+    let ver = Version.new
+
+    t.equal(ver.global.load, 0)
+    t.equal(ver.local, 0)
+  })
+
+  t.test('Version.updated?', fn (t) {
+    let ver = Version.new
+
+    t.false(ver.updated?)
+
+    let _ = ver.global.add(1)
+
+    t.true(ver.updated?)
+    t.false(ver.updated?)
+  })
+
+  t.test('Version.clone', fn (t) {
+    let a = Version.new
+
+    a.local = 10
+
+    let b = a.clone
+
+    t.equal(a.global.load, b.global.load)
+    t.equal(a.local, b.local)
+  })
+
+  t.ok('Sites.load with a valid directory', fn (t) {
+    let sites = try Sites(fixtures.join('sites')).load
+    let abs = fixtures.join('sites').join('localhost')
+    let Ok(dir) = sites.get('localhost'.to_slice) else {
+      throw 'localhost is missing'
+    }
+
+    t.equal(dir.path, abs)
+    Result.Ok(nil)
+  })
+
+  t.test('Sites.load with a non-existing directory', fn (t) {
+    t.true(Sites('invalid'.to_path).load.error?)
+  })
+
+  t.ok('Sites.load with an empty directory', fn (t) {
+    let sites = try Sites(fixtures.join('empty-sites')).load
+
+    t.true(sites.empty?)
+    Result.Ok(nil)
+  })
+
+  t.test('Config.new', fn (t) {
+    let cfg = Config.new
+
+    t.equal(cfg.version.global.load, 0)
+    t.equal(cfg.version.local, 0)
+    t.equal(cfg.sites.path, SITES.to_path)
+    t.equal(cfg.ip, IpAddress.v4(0, 0, 0, 0))
+    t.equal(cfg.port, PORT)
+    t.equal(cfg.tls, Option.None)
+    t.true(cfg.log_timestamps)
+  })
+
+  t.test('Config.tls=', fn (t) {
+    let cfg = Config.new
+
+    cfg.tls = 'test'.to_path
+
+    t.equal(cfg.tls, Option.Some('test'.to_path))
+    t.equal(cfg.port, TLS_PORT)
+  })
+
+  t.test('Config.parse_ip', fn (t) {
+    let cfg = Config.new
+
+    t.equal(cfg.parse_ip('1.2.3.4'), Result.Ok(nil))
+    t.equal(cfg.ip, IpAddress.v4(1, 2, 3, 4))
+
+    t.equal(cfg.parse_ip('::1'), Result.Ok(nil))
+    t.equal(cfg.ip, IpAddress.v6(0, 0, 0, 0, 0, 0, 0, 1))
+
+    t.equal(cfg.parse_ip('foo'), Result.Error("the IP 'foo' is invalid"))
+    t.equal(cfg.ip, IpAddress.v6(0, 0, 0, 0, 0, 0, 0, 1))
+  })
+
+  t.test('Config.parse_port', fn (t) {
+    let cfg = Config.new
+
+    t.equal(cfg.parse_port('10'), Result.Ok(nil))
+    t.equal(cfg.port, 10)
+
+    t.equal(cfg.parse_port('a'), Result.Error("the port 'a' is invalid"))
+    t.equal(cfg.port, 10)
+  })
+
+  t.ok('Config.load_tls with valid TLS data', fn (t) {
+    let cfg = config
+    let Ok(Some(tls)) = cfg.load_tls else throw 'failed to load TLS'
+
+    t.true(tls.get('localhost').ok?)
+    Result.Ok(nil)
+  })
+
+  t.test('Config.load_tls with a non-existing directory', fn (t) {
+    let cfg = config
+
+    cfg.tls = fixtures.join('invalid')
+
+    t.true(cfg.load_tls.error?)
+  })
+
+  t.test('Config.load_tls with invalid TLS data', fn (t) {
+    let cfg = config
+
+    cfg.tls = fixtures.join('invalid-tls')
+
+    t.true(cfg.load_tls.error?)
+  })
+
+  t.ok('Config.load_tls with an empty TLS directory', fn (t) {
+    let cfg = config
+
+    cfg.tls = fixtures.join('empty-tls')
+
+    let Ok(Some(tls)) = cfg.load_tls else throw 'failed to load TLS'
+
+    t.true(tls.empty?)
+    Result.Ok(nil)
+  })
+}

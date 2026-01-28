@@ -1,0 +1,11 @@
+import shost.cli
+import std.env
+
+type async Main {
+  fn async main {
+    match cli.run(env.arguments, env.variables) {
+      case Ok(_) -> {}
+      case Error(e) -> cli.error(e)
+    }
+  }
+}
