@@ -1,0 +1,115 @@
+import helpers (get_port, send_request)
+import shost
+import std.signal (Signal)
+import std.test (Tests)
+
+fn pub tests(t: mut Tests) {
+  t.fork(
+    'shost.print',
+    child: fn { shost.print('hello') },
+    test: fn (t, p) { t.equal(p.spawn.stdout, 'hello\n') },
+  )
+
+  t.fork(
+    'shost.error',
+    child: fn { shost.error('hello') },
+    test: fn (t, p) { t.equal(p.spawn.stderr, 'error: hello\n') },
+  )
+
+  t.fork(
+    'shost.run with the help option',
+    child: fn { shost.run(['--help'], Map.new) },
+    test: fn (t, p) {
+      t.true(p.spawn.stdout.contains?('Show this help message'))
+    },
+  )
+
+  t.fork(
+    'shost.run with the version option',
+    child: fn { shost.run(['--version'], Map.new) },
+    test: fn (t, p) { t.equal(p.spawn.stdout, 'shost ${shost.VERSION}\n') },
+  )
+
+  t.test('shost.run with an invalid port', fn (t) {
+    t.equal(
+      shost.run(['--port=abc'], Map.new),
+      Result.Error("the port 'abc' is invalid"),
+    )
+  })
+
+  t.test('shost.run with an invalid IP', fn (t) {
+    t.equal(
+      shost.run(['--ip=abc'], Map.new),
+      Result.Error("the IP 'abc' is invalid"),
+    )
+  })
+
+  t.fork(
+    'shost.run',
+    child: fn {
+      shost.run(
+        ['--port=0', '--ip=127.0.0.1', '--sites=fixtures/sites'],
+        Map.new,
+      )
+    },
+    test: fn (t, p) {
+      let child = p.spawn_only.or_panic
+      let port = get_port(child)
+
+      t.true(send_request('http://localhost:${port}'))
+
+      let out = ByteArray.new
+      let _ = child.signal(Signal.Quit)
+
+      t.true(child.wait.ok?)
+      t.true(child.stdout.as_mut.get.read_all(out).ok?)
+      t.true(out.to_string.contains?('GET /'))
+    },
+  )
+
+  t.fork(
+    'shost.run without any logging',
+    child: fn {
+      shost.run(
+        ['--port=0', '--ip=127.0.0.1', '--sites=fixtures/sites', '--quiet'],
+        Map.new,
+      )
+    },
+    test: fn (t, p) {
+      let child = p.spawn_only.or_panic
+      let port = get_port(child)
+
+      t.true(send_request('http://localhost:${port}'))
+
+      let out = ByteArray.new
+      let _ = child.signal(Signal.Quit)
+
+      t.true(child.wait.ok?)
+      t.equal(child.stdout.as_mut.get.read_all(out), Result.Ok(0))
+      t.true(out.empty?)
+    },
+  )
+
+  t.fork(
+    'shost.run without logging timestamps',
+    child: fn {
+      let env = Map.new
+
+      env.set('INVOCATION_ID', '123')
+      shost.run(['--port=0', '--ip=127.0.0.1', '--sites=fixtures/sites'], env)
+    },
+    test: fn (t, p) {
+      let child = p.spawn_only.or_panic
+      let port = get_port(child)
+
+      t.true(send_request('http://localhost:${port}'))
+
+      let out = ByteArray.new
+      let _ = child.signal(Signal.Quit)
+
+      t.true(child.wait.ok?)
+      t.true(child.stdout.as_mut.get.read_all(out).ok?)
+      t.true(out.to_string.starts_with?('127.0.0.1'))
+    },
+  )
+}

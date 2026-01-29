@@ -1,0 +1,295 @@
+import helpers (fixtures, get_port, send_request)
+import shost.config (Config, Sites, Version)
+import shost.http (Handler, Hosts, start)
+import std.net.http (Header, Status)
+import std.net.http.server (Directory, Logger)
+import std.net.http.test (RequestBuilder)
+import std.signal (Signal)
+import std.test (Tests)
+
+fn sites -> uni Sites {
+  recover Sites(fixtures.join('sites'))
+}
+
+fn handler -> Handler {
+  let map = Map.new
+
+  for host in ['localhost', 'example.com'] {
+    map.set(host.to_slice, Directory.new(sites.path.join(host)))
+  }
+
+  Handler(
+    hosts: Hosts.new(path: sites, sites: recover map.clone),
+    sites: map,
+    version: Version.new,
+    logger: Logger.new.disabled,
+  )
+}
+
+fn pub tests(t: mut Tests) {
+  t.fork(
+    'http.start with TLS enabled',
+    child: fn {
+      let cfg = Config.new
+
+      cfg.sites = fixtures.join('sites')
+      cfg.tls = fixtures.join('tls')
+      cfg.port = 0
+      cfg.log_requests = true
+      start(cfg)
+    },
+    test: fn (t, p) {
+      let child = p.spawn_only.or_panic
+      let port = get_port(child)
+
+      t.true(send_request('https://localhost:${port}'))
+
+      let out = ByteArray.new
+      let _ = child.signal(Signal.Quit)
+
+      t.true(child.wait.ok?)
+      t.true(child.stdout.as_mut.get.read_all(out).ok?)
+      t.true(out.to_string.contains?('GET /'))
+    },
+  )
+
+  # It's difficult to accurately test the reloading of a config with this style
+  # of integration test, at least without test-specific modifications to the
+  # source code. Instead we use this as a simple smoke test.
+  t.fork(
+    'http.start with a config reload',
+    child: fn {
+      let cfg = Config.new
+
+      cfg.sites = fixtures.join('sites')
+      cfg.port = 0
+      cfg.log_requests = true
+      start(cfg)
+    },
+    test: fn (t, p) {
+      let child = p.spawn_only.or_panic
+      let port = get_port(child)
+      let uri = 'http://localhost:${port}'
+
+      # The initial request.
+      t.true(send_request(uri))
+
+      let _ = child.signal(Signal.Hangup)
+
+      # The request that should process the config update.
+      t.true(send_request(uri))
+
+      let out = ByteArray.new
+      let _ = child.signal(Signal.Quit)
+
+      t.true(child.wait.ok?)
+      t.true(child.stdout.as_mut.get.read_all(out).ok?)
+      t.true(out.to_string.contains?('GET /'))
+    },
+  )
+
+  t.test('Hosts.reload', fn (t) {
+    let hosts = Hosts.new(path: sites, sites: recover Map.new)
+
+    hosts.reload
+
+    let map = recover await hosts.get
+
+    t.true(map.get('localhost'.to_slice).ok?)
+  })
+
+  t.panic('Hosts.reload with an invalid path', fn {
+    let hosts = Hosts.new(
+      path: recover Sites(fixtures.join('invalid')),
+      sites: recover Map.new,
+    )
+
+    hosts.reload
+    await hosts.get
+  })
+
+  t.test('Handler.handle with an invalid method', fn (t) {
+    let srv = handler
+    let res = RequestBuilder.post('/').send(srv)
+
+    t.equal(res.status, Status.method_not_allowed)
+  })
+
+  t.test('Handler.handle with a valid GET request', fn (t) {
+    let srv = handler
+    let res = RequestBuilder.get('/').send(srv)
+    let buf = ByteArray.new
+
+    t.equal(res.status, Status.ok)
+    t.equal(res.headers.get(Header.access_control_allow_origin), Result.Ok('*'))
+    t.equal(res.body.reader.read_all(buf), Result.Ok(6))
+    t.equal(buf.to_string, 'hello\n')
+  })
+
+  t.test('Handler.handle with a valid HEAD request', fn (t) {
+    let srv = handler
+    let res = RequestBuilder.head('/').send(srv)
+    let buf = ByteArray.new
+
+    t.equal(res.status, Status.ok)
+    t.equal(res.body.reader.read_all(buf), Result.Ok(0))
+    t.equal(buf.to_string, '')
+  })
+
+  t.test('Handler.handle with a request to a non-existing file', fn (t) {
+    let srv = handler
+    let res = RequestBuilder.get('/missing').send(srv)
+    let buf = ByteArray.new
+
+    t.equal(res.status, Status.not_found)
+    t.equal(res.body.reader.read_all(buf), Result.Ok(0))
+  })
+
+  t.test('Handler.handle with a custom 404 page', fn (t) {
+    let srv = handler
+    let req = RequestBuilder.get('/missing')
+
+    req.headers.set(Header.host, 'example.com')
+
+    let res = req.send(srv)
+    let buf = ByteArray.new
+
+    t.equal(res.status, Status.not_found)
+    t.equal(res.body.reader.read_all(buf), Result.Ok(10))
+    t.equal(buf.to_string, 'not found\n')
+  })
+
+  t.test('Handler.handle with a compressed response', fn (t) {
+    let srv = handler
+    let res = RequestBuilder
+      .get('/')
+      .header(Header.accept_encoding, 'gzip')
+      .send(srv)
+
+    t.equal(res.status, Status.ok)
+    t.equal(res.headers.get(Header.content_encoding), Result.Ok('gzip'))
+    t.true(
+      match res.body {
+        case Stream(_) -> true
+        case _ -> false
+      },
+    )
+  })
+
+  t.test('Handler.handle with an empty User-agent', fn (t) {
+    let srv = handler
+    let req = RequestBuilder.get('/')
+
+    req.headers.set(Header.user_agent, '')
+
+    let res = req.send(srv)
+
+    t.equal(res.status, Status.forbidden)
+  })
+
+  t.test('Handler.handle with an invalid browser-like User-agent', fn (t) {
+    let srv = handler
+    let req = RequestBuilder.get('/')
+
+    req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+
+    let res = req.send(srv)
+
+    t.equal(res.status, Status.forbidden)
+  })
+
+  t.test(
+    'Handler.handle with a browser-like User-agent and the Sec-Fetch-Site header',
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/')
+
+      req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+      req.headers.set(Header.sec_fetch_site, 'origin')
+
+      let res = req.send(srv)
+
+      t.equal(res.status, Status.ok)
+    },
+  )
+
+  t.test(
+    'Handler.handle with a browser-like User-agent and the Sec-Gpc header',
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/')
+
+      req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+      req.headers.set(Header.new('sec-gpc'), 'foo')
+
+      let res = req.send(srv)
+
+      t.equal(res.status, Status.ok)
+    },
+  )
+
+  t.test(
+    'Handler.handle with a browser-like User-agent that includes a URL',
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/')
+
+      req.headers.set(
+        Header.user_agent,
+        'Mozilla/5.0 (Whatever; https://example.com)',
+      )
+
+      let res = req.send(srv)
+
+      t.equal(res.status, Status.ok)
+    },
+  )
+
+  t.test('Handler.handle with the Googlebot User-agent', fn (t) {
+    let srv = handler
+    let req = RequestBuilder.get('/')
+
+    req.headers.set(
+      Header.user_agent,
+      'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/1.2.3.4 Safari/537.36',
+    )
+
+    let res = req.send(srv)
+
+    t.equal(res.status, Status.ok)
+  })
+
+  t.test('Handler.handle with a request to a PHP file', fn (t) {
+    let srv = handler
+    let res = RequestBuilder.get('/wp-includes/test.php').send(srv)
+
+    t.equal(res.status, Status.forbidden)
+  })
+
+  t.test('Handler.handle when the configuration needs to be reloaded', fn (t) {
+    let srv = handler
+    let _ = srv.sites.remove('example.com'.to_slice)
+    let _ = srv.version.global.add(1)
+    let req = RequestBuilder.get('/')
+
+    req.headers.set(Header.host, 'example.com')
+
+    let res = req.send(srv)
+    let buf = ByteArray.new
+
+    t.equal(res.status, Status.ok)
+    t.equal(res.body.reader.read_all(buf), Result.Ok(8))
+    t.equal(buf.to_string, 'example\n')
+  })
+
+  t.test('Handler.handle with an invalid host', fn (t) {
+    let srv = handler
+    let req = RequestBuilder.get('/')
+
+    req.headers.set(Header.host, 'foo.com')
+
+    let res = req.send(srv)
+
+    t.equal(res.status, Status.bad_request)
+  })
+}

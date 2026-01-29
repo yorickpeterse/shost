@@ -41,6 +41,12 @@ fn pub tests(t: mut Tests) {
     t.equal(a.local, b.local)
   })
 
+  t.test('Sites.new', fn (t) {
+    let sites = Sites.new
+
+    t.equal(sites.path, SITES.to_path)
+  })
+
   t.ok('Sites.load with a valid directory', fn (t) {
     let sites = try Sites(fixtures.join('sites')).load
     let abs = fixtures.join('sites').join('localhost')
@@ -63,16 +69,28 @@ fn pub tests(t: mut Tests) {
     Result.Ok(nil)
   })
 
+  t.test('Sites.clone', fn (t) {
+    let a = Sites('a'.to_path)
+    let b = a.clone
+
+    t.equal(a.path, b.path)
+  })
+
   t.test('Config.new', fn (t) {
     let cfg = Config.new
 
-    t.equal(cfg.version.global.load, 0)
-    t.equal(cfg.version.local, 0)
     t.equal(cfg.sites.path, SITES.to_path)
     t.equal(cfg.ip, IpAddress.v4(0, 0, 0, 0))
     t.equal(cfg.port, PORT)
     t.equal(cfg.tls, Option.None)
     t.true(cfg.log_timestamps)
+  })
+
+  t.test('Config.sites=', fn (t) {
+    let cfg = Config.new
+
+    cfg.sites = 'foo'.to_path
+    t.equal(cfg.sites.path, 'foo'.to_path)
   })
 
   t.test('Config.tls=', fn (t) {

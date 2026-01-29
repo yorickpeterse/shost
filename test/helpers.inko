@@ -2,6 +2,12 @@ import std.crypto.pem
 import std.crypto.x509
 import std.fs.path (Path)
 import std.io (Buffer)
+import std.net.http.client (Client)
+import std.net.tls (ClientConfig)
+import std.process (sleep)
+import std.sys (ChildProcess)
+import std.time (Duration)
+import std.uri (Uri)
 
 # A valid private key. Do not actually use this key outside of this test suite.
 #
@@ -141,4 +147,38 @@ fn pub private_key -> x509.PrivateKey {
 
 fn pub fixtures -> Path {
   'fixtures'.to_path.expand.or_panic
+}
+
+fn pub get_port(child: mut ChildProcess) -> String {
+  let buf = ByteArray.new
+  let _ = child.stderr.as_mut.get.read(into: buf, size: 128)
+
+  match buf.to_slice.split_once(':') {
+    case Some((_, port)) -> port.trim.to_string
+    case _ -> panic('failed to determine the port')
+  }
+}
+
+fn pub send_request(uri: String) -> Bool {
+  let client = Client.new
+
+  client.tls = ClientConfig.builder.with_certificate(certificate)
+
+  let mut i = 0
+
+  # Keep trying the requests until they succeed, in case the server isn't
+  # already running at this point.
+  while i < 10 {
+    let uri = Uri.parse(uri).or_panic
+
+    match client.get(uri).send {
+      case Ok(_) -> return true
+      case _ -> {
+        sleep(Duration.from_millis(10))
+        i += 1
+      }
+    }
+  }
+
+  false
 }

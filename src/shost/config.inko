@@ -40,6 +40,10 @@ type Version {
     Self(global: AtomicInt.new(0), local: 0)
   }
 
+  fn update {
+    @global.add(1)
+  }
+
   fn mut updated? -> Bool {
     let global = @global.load
 
@@ -93,8 +97,6 @@ impl Clone for Sites {
 
 # The configuration settings to use when serving websites.
 type Config {
-  let @version: Version
-
   # The directory containing the websites to serve.
   let mut @sites: Sites
 
@@ -117,7 +119,6 @@ type Config {
 
   fn static new -> Self {
     Self(
-      version: Version.new,
       sites: Sites.new,
       ip: IpAddress.v4(0, 0, 0, 0),
       port: PORT,

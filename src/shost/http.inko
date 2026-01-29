@@ -1,55 +1,76 @@
 import shost.config (Config, Sites, Version)
 import std.bytes (Slice)
-import std.fs.path (Path)
 import std.net.http (Header, Status)
 import std.net.http.server (
   Directory, Get, Handle, Head, Logger, Request, Response, Server,
   compress_response,
 )
+import std.signal (Signal)
+import std.stdio (Stderr)
 import std.sync (Promise)
 
-fn start(config: Config) -> Result[Nil, String] {
-  let sites = try config.sites.load
-  let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
-  let logger = if config.log_requests and config.log_timestamps {
+fn new_logger(config: ref Config) -> Logger {
+  if config.log_requests and config.log_timestamps {
     Logger.new
   } else if config.log_requests {
     Logger.new.without_timestamps
   } else {
     Logger.new.disabled
   }
+}
 
+fn start(config: Config) -> Result[Nil, String] {
+  let sites = try config.sites.load
+  let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
+  let logger = new_logger(config)
+  let ver = Version.new
   let srv = Server.new(fn {
     recover {
       Handler(
         hosts: hosts,
         sites: sites.clone,
-        version: config.version.clone,
+        version: ver.clone,
         logger: logger.clone,
       )
     }
   })
 
+  let ip = config.ip
+  let port = config.port
+
   match try config.load_tls {
-    case Some(v) -> {
-      # let conf = config.clone
+    case Some(tls) -> {
+      let mut tls = tls
+      let ver = ver.clone
 
       srv.dynamic_tls(fn move (host) {
-        # TODO
-        Option.None
+        if ver.updated? {
+          # If reloading the TLS configuration fails we'll keep using the
+          # existing so we don't just start dropping connections.
+          match config.load_tls {
+            case Ok(Some(v)) -> tls = v
+            case Ok(_) -> {}
+            case Error(e) -> Stderr.new.print(e.to_string)
+          }
+        }
+
+        let Some(host) = host else return Option.None
+
+        tls.get(host).ok
       })
     }
     case _ -> {}
   }
 
-  match srv.start_ip(config.ip, config.port) {
+  Reloader().wait(recover ver.clone, hosts)
+  srv.before_start(fn (addr, _) { Stderr.new.print('listening on ${addr}') })
+
+  match srv.start_ip(ip, port) {
     case Ok(_) -> Result.Ok(nil)
     case Error(e) -> {
       Result.Error('encountered an unexpected error in the accept loop: ${e}')
     }
   }
-
-  Result.Ok(nil)
 }
 
 # A process used for reloading the hosts configuration and propagating it across
@@ -93,21 +114,36 @@ type async Hosts {
   }
 }
 
+# A process that waits for the SIGHUP signal and triggers a configuration reload
+# in response.
+type async Reloader {
+  fn async wait(version: uni Version, hosts: Hosts) {
+    loop {
+      Signal.Hangup.wait
+      hosts.reload
+      version.update
+    }
+  }
+}
+
 # A type for handling requests, created for each HTTP connection.
-type Handler {
+type inline Handler {
   # The process to use for reloading the list of enabled websites.
   let @hosts: Hosts
 
   # The mapping of hostnames to a `Directory` used to serve corresponding
   # requests.
-  let mut @sites: Map[Slice[String], Directory]
+  let @sites: Map[Slice[String], Directory]
 
   # The configuration version this connection is using.
   let @version: Version
   let @logger: Logger
 
   fn mut reload_config {
-    if @version.updated? { @sites = await @hosts.get }
+    if @version.updated? {
+      @sites.clear
+      @sites.merge(await @hosts.get)
+    }
   }
 
   fn static_file(request: mut Request) -> Response {
