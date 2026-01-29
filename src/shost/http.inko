@@ -24,16 +24,20 @@ fn start(config: Config) -> Result[Nil, String] {
   let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
   let logger = new_logger(config)
   let ver = Version.new
-  let srv = Server.new(fn {
-    recover {
-      Handler(
-        hosts: hosts,
-        sites: sites.clone,
-        version: ver.clone,
-        logger: logger.clone,
-      )
-    }
-  })
+  let srv = {
+    let ver = ver.clone
+
+    Server.new(fn move {
+      recover {
+        Handler(
+          hosts: hosts,
+          sites: sites.clone,
+          version: ver.clone,
+          logger: logger.clone,
+        )
+      }
+    })
+  }
 
   let ip = config.ip
   let port = config.port
@@ -67,9 +71,7 @@ fn start(config: Config) -> Result[Nil, String] {
 
   match srv.start_ip(ip, port) {
     case Ok(_) -> Result.Ok(nil)
-    case Error(e) -> {
-      Result.Error('encountered an unexpected error in the accept loop: ${e}')
-    }
+    case Error(e) -> Result.Error('the server failed: ${e}')
   }
 }
 
