@@ -3,6 +3,7 @@ name: Push
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
