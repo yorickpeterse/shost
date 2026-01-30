@@ -1,8 +1,18 @@
 # shost
 
-An HTTP server written in Inko, for self-hosting static websites such as [my
-personal website](https://yorickpeterse.com/) or the [Inko
-manual](https://docs.inko-lang.org/manual/main/).
+An HTTP server written in [Inko](https://inko-lang.org/), for self-hosting
+static websites such as [my personal website](https://yorickpeterse.com/) or the
+[Inko manual](https://docs.inko-lang.org/manual/main/).
+
+## Why?
+
+There are plenty of capable HTTP servers such as [nginx](https://nginx.org/),
+[Caddy](https://caddyserver.com/) and more. I wrote shost for a few reasons:
+
+- As a showcase for Inko
+- To further test Inko's capabilities
+- To have full control over how the server works
+- Because I can
 
 ## Features
 
