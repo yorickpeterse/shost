@@ -18,7 +18,7 @@ release/version: .check-version
 	sed -E -i -e "s/^let VERSION = '([^']+)'$$/let VERSION = '${VERSION}'/" \
 		src/${NAME}.inko
 
-release/changelog: .check-version build
+release/changelog: .check-version
 	clogs "${VERSION}"
 
 release/commit: .check-version
