@@ -6,7 +6,7 @@ import std.stdio (Stderr, Stdout)
 import std.string (ToString)
 import std.sys (exit)
 
-let VERSION = '0.1.0'
+let VERSION = '0.2.0'
 
 fn print[T: ToString](value: ref T) {
   Stdout.new.print(value.to_string)
