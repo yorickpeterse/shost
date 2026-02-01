@@ -26,7 +26,8 @@ There are plenty of capable HTTP servers such as [nginx](https://nginx.org/),
 - Some simple heuristics for blocking bots that pretend to be browsers or try to
   scan for exploits
 - No garbage collector ruining the fun by introducing non-deterministic behavior
-
+- Supports reloading of configuration files using the `SIGHUP` signal or using a
+  Unix socket
 
 ## Anti-features
 
@@ -115,7 +116,20 @@ at the same time.
 
 Sending `SIGHUP` to the shost process causes it to reload the list of websites
 served and the TLS configuration. Sending signals is only necessary when adding
-or removing websites, not when changing their contents.
+or removing websites, not when changing their contents. The configuration can
+also be reloaded using a Unix socket. This allows cross-container reloads by
+mounting the socket into these containers. To do so, run `shost` with the
+`--control` option, for example:
+
+```bash
+shost --control /var/run/shost.sock
+```
+
+Then send the `reload` command like so:
+
+```bash
+echo -n reload | nc -U /var/run/shost.sock
+```
 
 ## License
 

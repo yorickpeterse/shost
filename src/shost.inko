@@ -39,6 +39,7 @@ fn run(
   opts.single('t', 'tls', 'DIR', 'The directory containing TLS configuration')
   opts.single('p', 'port', 'PORT', 'The port to listen on')
   opts.single('i', 'ip', 'IP', 'The IP to bind to')
+  opts.single('c', 'control', 'PATH', 'The path to the control socket')
   opts.flag('q', 'quiet', 'Disables logging of requests')
   opts.flag('v', 'version', 'Show the version')
 
@@ -73,6 +74,11 @@ fn run(
 
   match matches.value('port') {
     case Some(v) -> try cfg.parse_port(v)
+    case _ -> {}
+  }
+
+  match matches.value('control') {
+    case Some(v) -> cfg.control_socket = v.to_path
     case _ -> {}
   }
 

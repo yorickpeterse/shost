@@ -102,6 +102,14 @@ fn pub tests(t: mut Tests) {
     t.equal(cfg.port, TLS_PORT)
   })
 
+  t.test('Config.control_socket=', fn (t) {
+    let cfg = Config.new
+
+    cfg.control_socket = 'test'.to_path
+
+    t.equal(cfg.control_socket, Option.Some('test'.to_path))
+  })
+
   t.test('Config.parse_ip', fn (t) {
     let cfg = Config.new
 

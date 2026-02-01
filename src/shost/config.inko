@@ -117,6 +117,9 @@ type Config {
   # If request logging should be enabled or not.
   let mut @log_requests: Bool
 
+  # The path to use for the control socket, if any.
+  let mut @control_socket: Option[Path]
+
   fn static new -> Self {
     Self(
       sites: Sites.new,
@@ -125,6 +128,7 @@ type Config {
       tls: Option.None,
       log_timestamps: true,
       log_requests: true,
+      control_socket: Option.None,
     )
   }
 
@@ -135,6 +139,10 @@ type Config {
   fn mut tls=(value: Path) {
     @tls = Option.Some(value)
     @port = TLS_PORT
+  }
+
+  fn mut control_socket=(value: Path) {
+    @control_socket = Option.Some(value)
   }
 
   fn mut parse_ip(ip: String) -> Result[Nil, String] {
