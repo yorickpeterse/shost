@@ -188,6 +188,15 @@ type inline Handler {
       return true
     }
 
+    # Some bad bots pretend to be a Let's Encrypt validation server while
+    # sending request to random paths.
+    if ua.contains?('letsencrypt') {
+      match request.target {
+        case ['.well-known', 'acme-challenge', _] -> return false
+        case _ -> return true
+      }
+    }
+
     # We're serving static files and not PHP scripts, so clients requesting
     # those are likely bots scanning for vulnerabilities.
     match request.target.last {

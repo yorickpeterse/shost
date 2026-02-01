@@ -254,10 +254,38 @@ fn pub tests(t: mut Tests) {
       'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/1.2.3.4 Safari/537.36',
     )
 
-    let res = req.send(srv)
-
-    t.equal(res.status, Status.ok)
+    t.equal(req.send(srv).status, Status.ok)
   })
+
+  t.test(
+    "Handler.handle with a bot pretending to be a Let's Encrypt validation server",
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/foo')
+
+      req.headers.set(
+        Header.user_agent,
+        "Mozilla/5.0 (compatible; Let's Encrypt validation server; +https://www.letsencrypt.org)",
+      )
+
+      t.equal(req.send(srv).status, Status.forbidden)
+    },
+  )
+
+  t.test(
+    "Handler.handle with a valid Let's Encrypt HTTP-01 challenge",
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/.well-known/acme-challenge/foo')
+
+      req.headers.set(
+        Header.user_agent,
+        "Mozilla/5.0 (compatible; Let's Encrypt validation server; +https://www.letsencrypt.org)",
+      )
+
+      t.equal(req.send(srv).status, Status.not_found)
+    },
+  )
 
   t.test('Handler.handle with a request to a PHP file', fn (t) {
     let srv = handler
