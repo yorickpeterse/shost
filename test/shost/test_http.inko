@@ -8,6 +8,7 @@ import std.net.http.server (Directory, Logger)
 import std.net.http.test (RequestBuilder)
 import std.net.socket (UnixClient)
 import std.signal (Signal)
+import std.sync (Promise)
 import std.test (Tests)
 
 fn sites -> uni Sites {
@@ -27,6 +28,12 @@ fn handler -> Handler {
     version: Version.new,
     logger: Logger.new.disabled,
   )
+}
+
+impl ControlSocket {
+  fn async wait(promise: uni Promise[Nil]) {
+    promise.set(nil)
+  }
 }
 
 fn pub tests(t: mut Tests) {
@@ -119,7 +126,6 @@ fn pub tests(t: mut Tests) {
       let _ = child.signal(Signal.Quit)
 
       t.true(child.wait.ok?)
-      t.false(path.exists?)
 
       # In case the child didn't remove the socket path.
       let _ = path.remove_file
@@ -163,6 +169,9 @@ fn pub tests(t: mut Tests) {
       t.equal((await hosts.get).size, 2)
 
       not.notify
+      await proc.wait
+      t.false(path.exists?)
+
       Result.Ok(nil)
     })
   })
