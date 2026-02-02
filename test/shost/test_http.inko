@@ -19,6 +19,8 @@ fn handler -> Handler {
   }
 
   Handler(
+    port: 80,
+    tls: false,
     hosts: Hosts.new(path: sites, sites: recover map.clone),
     sites: map,
     version: Version.new,
@@ -320,4 +322,60 @@ fn pub tests(t: mut Tests) {
 
     t.equal(res.status, Status.bad_request)
   })
+
+  t.test('Handler.handle with www redirects', fn (t) {
+    let srv = handler
+
+    # A host for which a non-www version exists.
+    let req = RequestBuilder.get('/foo').query('key', 'value')
+
+    req.headers.set(Header.host, 'www.example.com')
+
+    let res = req.send(srv)
+
+    t.equal(res.status, Status.new(301))
+    t.equal(
+      res.headers.get(Header.location),
+      Result.Ok('http://example.com/foo?key=value'),
+    )
+
+    # A host without a non-www version.
+    let req = RequestBuilder.get('/foo').query('key', 'value')
+
+    req.headers.set(Header.host, 'www.foo.com')
+    t.equal(req.send(srv).status, Status.bad_request)
+  })
+
+  t.test(
+    'Handler.handle with www redirects using a non-standard port',
+    fn (t) {
+      let map = Map.new
+
+      map.set(
+        'example.com'.to_slice,
+        Directory.new(sites.path.join('example.com')),
+      )
+
+      let srv = Handler(
+        port: 1234,
+        tls: true,
+        hosts: Hosts.new(path: sites, sites: recover map.clone),
+        sites: map,
+        version: Version.new,
+        logger: Logger.new.disabled,
+      )
+
+      let req = RequestBuilder.get('/foo').query('key', 'value')
+
+      req.headers.set(Header.host, 'www.example.com')
+
+      let res = req.send(srv)
+
+      t.equal(res.status, Status.new(301))
+      t.equal(
+        res.headers.get(Header.location),
+        Result.Ok('https://example.com:1234/foo?key=value'),
+      )
+    },
+  )
 }

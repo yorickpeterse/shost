@@ -8,6 +8,7 @@ import std.net.http.server (
 import std.signal (Signal)
 import std.stdio (Stderr)
 import std.sync (Promise)
+import std.uri (Host, Scheme)
 
 fn new_logger(config: ref Config) -> Logger {
   if config.log_requests and config.log_timestamps {
@@ -24,12 +25,17 @@ fn start(config: Config) -> Result[Nil, String] {
   let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
   let logger = new_logger(config)
   let ver = Version.new
+  let ip = config.ip
+  let port = config.port
+  let tls = config.tls.some?
   let srv = {
     let ver = ver.clone
 
     Server.new(fn move {
       recover {
         Handler(
+          port: port,
+          tls: tls,
           hosts: hosts,
           sites: sites.clone,
           version: ver.clone,
@@ -38,9 +44,6 @@ fn start(config: Config) -> Result[Nil, String] {
       }
     })
   }
-
-  let ip = config.ip
-  let port = config.port
 
   match try config.load_tls {
     case Some(tls) -> {
@@ -133,6 +136,12 @@ type inline Handler {
   # The process to use for reloading the list of enabled websites.
   let @hosts: Hosts
 
+  # The port we're listening on.
+  let @port: Int
+
+  # If TLS is used or not.
+  let @tls: Bool
+
   # The mapping of hostnames to a `Directory` used to serve corresponding
   # requests.
   let @sites: Map[Slice[String], Directory]
@@ -150,7 +159,7 @@ type inline Handler {
 
   fn static_file(request: mut Request) -> Response {
     let (host, _) = request.host
-    let Ok(dir) = @sites.get(host) else return Response.bad_request
+    let Ok(dir) = @sites.get(host) else return invalid_host(request, host)
     let mut res = dir.handle(request, request.path.to_slice)
 
     if res.status.not_found? {
@@ -161,6 +170,20 @@ type inline Handler {
     }
 
     res.header(Header.access_control_allow_origin, '*')
+  }
+
+  fn invalid_host(request: ref Request, host: Slice[String]) -> Response {
+    let non_www = match host.strip_prefix('www.') {
+      case Some(v) if @sites.get(v).ok? -> v
+      case _ -> return Response.bad_request
+    }
+
+    let uri = request.uri.clone
+
+    uri.host = Host.new(non_www)
+    uri.scheme = Option.Some(if @tls { Scheme.Https } else { Scheme.Http })
+    uri.port = Option.Some(@port)
+    Response.new.status(Status.new(301)).header(Header.location, uri.to_string)
   }
 
   fn bad_bot?(request: ref Request) -> Bool {
