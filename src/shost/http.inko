@@ -1,13 +1,10 @@
 import shost.config (Config, Sites, Version)
 import std.bytes (Slice)
-import std.fs.path (Path)
-import std.io
 import std.net.http (Header, Status)
 import std.net.http.server (
   Directory, Get, Handle, Head, Logger, Request, Response, Server,
   compress_response,
 )
-import std.net.socket (Notifier, UnixServer)
 import std.signal (Signal)
 import std.stdio (Stderr)
 import std.sync (Promise)
@@ -45,20 +42,6 @@ fn start(config: Config) -> Result[Nil, String] {
   let ip = config.ip
   let port = config.port
 
-  Reloader.new(recover ver.clone, hosts).wait
-
-  match config.control_socket {
-    case Some(v) -> {
-      let (ctl_proc, ctl_not) = try ControlSocket
-        .new(recover v.clone, recover ver.clone, hosts)
-        .map_error(fn (e) { 'failed to enable the control socket: ${e}' })
-
-      ctl_proc.run
-      srv.before_shutdown(fn move { ctl_not.notify })
-    }
-    case _ -> {}
-  }
-
   match try config.load_tls {
     case Some(tls) -> {
       let mut tls = tls
@@ -83,75 +66,12 @@ fn start(config: Config) -> Result[Nil, String] {
     case _ -> {}
   }
 
+  Reloader().wait(recover ver.clone, hosts)
   srv.before_start(fn (addr, _) { Stderr.new.print('listening on ${addr}') })
 
   match srv.start_ip(ip, port) {
     case Ok(_) -> Result.Ok(nil)
     case Error(e) -> Result.Error('the server failed: ${e}')
-  }
-}
-
-fn reload(version: ref Version, hosts: Hosts) {
-  hosts.reload
-  version.update
-}
-
-# A process that listens on a Unix socket and is used to control the server
-# (e.g. triggering configuration reloads).
-#
-# When running in a container it may be difficult to reload the configuration
-# using Unix signals if the process sending the signal also runs in a container.
-# In such a case the socket may be mounted across containers and used instead.
-type async ControlSocket {
-  let @path: Path
-  let @buffer: ByteArray
-  let @socket: UnixServer
-  let @version: Version
-  let @hosts: Hosts
-
-  fn static new(
-    path: uni Path,
-    version: uni Version,
-    hosts: Hosts,
-  ) -> Result[(Self, Notifier), io.Error] {
-    let _ = path.remove_file
-    let sock = recover try UnixServer.new(path.clone)
-    let not = sock.notifier.get
-    let proc = Self(
-      path: path,
-      buffer: recover ByteArray.new,
-      socket: sock,
-      version: version,
-      hosts: hosts,
-    )
-
-    Result.Ok((proc, not))
-  }
-
-  fn async mut run {
-    loop {
-      let client = match @socket.accept {
-        case Ok(v) -> v
-        case Error(Interrupted) -> break
-        case _ -> next
-      }
-
-      # While we could accept any input here to trigger a reload, we check for a
-      # specific string just to prevent users from depending on _any_ input
-      # being valid, and so that (if ever necessary) we can add more commands in
-      # the future.
-      match client.read(into: @buffer, size: 6) {
-        case Ok(_) if @buffer.equals?('reload') -> {
-          reload(@version, @hosts)
-          client.write('OK')
-        }
-        case _ -> client.write('invalid command')
-      }
-
-      @buffer.clear
-    }
-
-    let _ = @path.remove_file
   }
 }
 
@@ -199,17 +119,11 @@ type async Hosts {
 # A process that waits for the SIGHUP signal and triggers a configuration reload
 # in response.
 type async Reloader {
-  let @version: Version
-  let @hosts: Hosts
-
-  fn static new(version: uni Version, hosts: Hosts) -> Self {
-    Self(version: version, hosts: hosts)
-  }
-
-  fn async wait {
+  fn async wait(version: uni Version, hosts: Hosts) {
     loop {
       Signal.Hangup.wait
-      reload(@version, @hosts)
+      hosts.reload
+      version.update
     }
   }
 }

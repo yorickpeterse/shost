@@ -1,14 +1,10 @@
-import helpers (fixtures, get_port, send_request, with_directory)
+import helpers (fixtures, get_port, send_request)
 import shost.config (Config, Sites, Version)
-import shost.http (ControlSocket, Handler, Hosts, start)
-import std.env
-import std.io
+import shost.http (Handler, Hosts, start)
 import std.net.http (Header, Status)
 import std.net.http.server (Directory, Logger)
 import std.net.http.test (RequestBuilder)
-import std.net.socket (UnixClient)
 import std.signal (Signal)
-import std.sync (Promise)
 import std.test (Tests)
 
 fn sites -> uni Sites {
@@ -28,12 +24,6 @@ fn handler -> Handler {
     version: Version.new,
     logger: Logger.new.disabled,
   )
-}
-
-impl ControlSocket {
-  fn async wait(promise: uni Promise[Nil]) {
-    promise.set(nil)
-  }
 }
 
 fn pub tests(t: mut Tests) {
@@ -97,112 +87,6 @@ fn pub tests(t: mut Tests) {
       t.true(out.to_string.contains?('GET /'))
     },
   )
-
-  t.fork(
-    'http.start with a control socket',
-    child: fn {
-      let cfg = Config.new
-
-      cfg.sites = fixtures.join('sites')
-      cfg.port = 0
-      cfg.log_requests = true
-      cfg.control_socket = env.temporary_directory.join(
-        'shost_http_start_control_socket.sock',
-      )
-      start(cfg)
-    },
-    test: fn (t, p) {
-      let child = p.spawn_only.or_panic
-      let port = get_port(child)
-      let uri = 'http://localhost:${port}'
-      let path = env.temporary_directory.join(
-        'shost_http_start_control_socket.sock',
-      )
-
-      # The initial request, used to wait for the server to start.
-      t.true(send_request(uri))
-      t.true(path.exists?)
-
-      let _ = child.signal(Signal.Quit)
-
-      t.true(child.wait.ok?)
-
-      # In case the child didn't remove the socket path.
-      let _ = path.remove_file
-    },
-  )
-
-  t.test('ControlSocket.new', fn (t) {
-    with_directory(t.id, fn (dir) {
-      let path = recover dir.join('shost.sock')
-      let ver = Version.new
-      let hosts = Hosts.new(path: sites, sites: recover Map.new)
-
-      t.equal(
-        ControlSocket.new(path, recover ver.clone, hosts).error,
-        Option.None,
-      )
-    })
-  })
-
-  t.ok('ControlSocket.run with a valid command', fn (t) {
-    with_directory(t.id, fn (dir) -> Result[Nil, io.Error] {
-      let path = dir.join('shost.sock')
-      let ver = Version.new
-      let hosts = Hosts.new(path: sites, sites: recover Map.new)
-      let (proc, not) = try ControlSocket.new(
-        recover path.clone,
-        recover ver.clone,
-        hosts,
-      )
-
-      proc.run
-
-      let client = try UnixClient.new(path)
-      let buf = ByteArray.new
-
-      try client.write('reload')
-      try client.read_all(buf)
-
-      t.equal(buf.to_string, 'OK')
-      t.equal(ver.global.load, 1)
-      t.equal((await hosts.get).size, 2)
-
-      not.notify
-      await proc.wait
-      t.false(path.exists?)
-
-      Result.Ok(nil)
-    })
-  })
-
-  t.ok('ControlSocket.run with a invalid command', fn (t) {
-    with_directory(t.id, fn (dir) -> Result[Nil, io.Error] {
-      let path = dir.join('shost.sock')
-      let ver = Version.new
-      let hosts = Hosts.new(path: sites, sites: recover Map.new)
-      let (proc, not) = try ControlSocket.new(
-        recover path.clone,
-        recover ver.clone,
-        hosts,
-      )
-
-      proc.run
-
-      let client = try UnixClient.new(path)
-      let buf = ByteArray.new
-
-      try client.write('foo')
-      try client.read_all(buf)
-
-      t.equal(buf.to_string, 'invalid command')
-      t.equal(ver.global.load, 0)
-      t.equal((await hosts.get).size, 0)
-
-      not.notify
-      Result.Ok(nil)
-    })
-  })
 
   t.test('Hosts.reload', fn (t) {
     let hosts = Hosts.new(path: sites, sites: recover Map.new)

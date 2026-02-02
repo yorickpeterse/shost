@@ -1,6 +1,5 @@
 import std.crypto.pem
 import std.crypto.x509
-import std.env
 import std.fs.path (Path)
 import std.io (Buffer)
 import std.net.http.client (Client)
@@ -170,10 +169,7 @@ fn pub send_request(uri: String) -> Bool {
   # Keep trying the requests until they succeed, in case the server isn't
   # already running at this point.
   while i < 10 {
-    let uri = match Uri.parse(uri) {
-      case Ok(v) -> v
-      case Error(e) -> panic("the URI '${uri}' is invalid: ${e}")
-    }
+    let uri = Uri.parse(uri).or_panic
 
     match client.get(uri).send {
       case Ok(_) -> return true
@@ -185,13 +181,4 @@ fn pub send_request(uri: String) -> Bool {
   }
 
   false
-}
-
-fn pub with_directory[R](id: Int, func: fn (ref Path) -> R) -> R {
-  let path = env.temporary_directory.join('inko-test-directory-${id}')
-  let _ = path.create_directory_all
-  let ret = func.call(path)
-  let _ = path.remove_directory_all
-
-  ret
 }
