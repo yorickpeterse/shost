@@ -25,10 +25,7 @@ fn error(value: String) -> Never {
   exit(1)
 }
 
-fn run(
-  arguments: Array[String],
-  variables: Map[String, String],
-) -> Result[Nil, String] {
+fn run(arguments: Array[String]) -> Result[Nil, String] {
   let opts = Options.new('shost')
 
   opts.description = 'An HTTP server for self-hosting static websites.'
@@ -40,6 +37,7 @@ fn run(
   opts.single('p', 'port', 'PORT', 'The port to listen on')
   opts.single('i', 'ip', 'IP', 'The IP to bind to')
   opts.flag('q', 'quiet', 'Disables logging of requests')
+  opts.flag('', 'no-timestamps', "Don't add timestamps to log entries")
   opts.flag('v', 'version', 'Show the version')
 
   let matches = try opts.parse(arguments).map_error(fn (e) { e.to_string })
@@ -77,17 +75,14 @@ fn run(
   }
 
   cfg.log_requests = !matches.contains?('quiet')
-
-  # systemd already includes timestamps for each log entry, so if we know we're
-  # running under systemd there's no reason to add our own.
-  cfg.log_timestamps = variables.get('INVOCATION_ID').error?
+  cfg.log_timestamps = !matches.contains?('no-timestamps')
 
   http.start(cfg)
 }
 
 type async Main {
   fn async main {
-    match run(env.arguments, env.variables) {
+    match run(env.arguments) {
       case Ok(_) -> {}
       case Error(e) -> error(e)
     }
