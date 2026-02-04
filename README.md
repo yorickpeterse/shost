@@ -27,7 +27,6 @@ There are plenty of capable HTTP servers such as [nginx](https://nginx.org/),
   scan for exploits
 - No garbage collector ruining the fun by introducing non-deterministic behavior
 
-
 ## Anti-features
 
 - Proxying requests to backend servers

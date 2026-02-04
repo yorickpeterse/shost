@@ -1,11 +1,20 @@
 import helpers (fixtures, get_port, send_request)
 import shost.config (Config, Sites, Version)
-import shost.http (Handler, Hosts, start)
+import shost.http (DebugWriter, Handler, Hosts, start)
+import std.io (Buffer)
+import std.json (Json)
 import std.net.http (Header, Status)
 import std.net.http.server (Directory, Logger)
 import std.net.http.test (RequestBuilder)
 import std.signal (Signal)
+import std.sync (Promise)
 import std.test (Tests)
+
+impl DebugWriter {
+  fn async wait(promise: uni Promise[Nil]) {
+    promise.set(nil)
+  }
+}
 
 fn sites -> uni Sites {
   recover Sites(fixtures.join('sites'))
@@ -19,6 +28,7 @@ fn handler -> Handler {
   }
 
   Handler(
+    debug: Option.None,
     port: 80,
     tls: false,
     hosts: Hosts.new(path: sites, sites: recover map.clone),
@@ -201,6 +211,56 @@ fn pub tests(t: mut Tests) {
     t.equal(res.headers.get(Header.connection), Result.Ok('close'))
   })
 
+  t.fork(
+    'Handler.handle with an invalid browser-like User-agent and bad bot logging enabled',
+    child: fn {
+      let map = Map.new
+
+      map.set(
+        'example.com'.to_slice,
+        Directory.new(sites.path.join('example.com')),
+      )
+
+      let debug = DebugWriter.new
+      let srv = Handler(
+        debug: Option.Some(debug),
+        port: 1234,
+        tls: true,
+        hosts: Hosts.new(path: sites, sites: recover map.clone),
+        sites: map,
+        version: Version.new,
+        logger: Logger.new.disabled,
+      )
+
+      let req = RequestBuilder.get('/')
+
+      req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+
+      let _ = req.send(srv)
+
+      await debug.wait
+    },
+    test: fn (t, p) {
+      let json = Json.parse(Buffer.new(p.spawn.stderr)).or_panic
+
+      t.equal(json.query.key('address').as_string, Option.Some('192.0.2.0:80'))
+      t.equal(json.query.key('host').as_string, Option.Some('localhost'))
+      t.equal(json.query.key('uri').as_string, Option.Some('/'))
+      t.equal(
+        json.query.key('headers').key('host').as_string,
+        Option.Some('localhost'),
+      )
+      t.equal(
+        json.query.key('headers').key('user-agent').as_string,
+        Option.Some('Mozilla/5.0 (Whatever)'),
+      )
+      t.equal(
+        json.query.key('headers').key('connection').as_string,
+        Option.Some('close'),
+      )
+    },
+  )
+
   t.test(
     'Handler.handle with a browser-like User-agent and the Sec-Fetch-Site header',
     fn (t) {
@@ -224,6 +284,36 @@ fn pub tests(t: mut Tests) {
 
       req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
       req.headers.set(Header.new('sec-gpc'), 'foo')
+
+      let res = req.send(srv)
+
+      t.equal(res.status, Status.ok)
+    },
+  )
+
+  t.test(
+    'Handler.handle with a browser-like User-agent and the Sec-ch-ua header',
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/')
+
+      req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+      req.headers.set(Header.new('sec-ch-ua'), 'foo')
+
+      let res = req.send(srv)
+
+      t.equal(res.status, Status.ok)
+    },
+  )
+
+  t.test(
+    'Handler.handle with a browser-like User-agent that enables Brotli',
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/')
+
+      req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+      req.headers.set(Header.accept_encoding, 'gzip, deflate, br')
 
       let res = req.send(srv)
 
@@ -358,6 +448,7 @@ fn pub tests(t: mut Tests) {
       )
 
       let srv = Handler(
+        debug: Option.None,
         port: 1234,
         tls: true,
         hosts: Hosts.new(path: sites, sites: recover map.clone),

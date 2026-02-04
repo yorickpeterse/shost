@@ -38,6 +38,7 @@ fn run(arguments: Array[String]) -> Result[Nil, String] {
   opts.single('i', 'ip', 'IP', 'The IP to bind to')
   opts.flag('q', 'quiet', 'Disables logging of requests')
   opts.flag('', 'no-timestamps', "Don't add timestamps to log entries")
+  opts.flag('', 'log-bad-bots', 'Log to STDERR for bad bot requests')
   opts.flag('v', 'version', 'Show the version')
 
   let matches = try opts.parse(arguments).map_error(fn (e) { e.to_string })
@@ -76,6 +77,7 @@ fn run(arguments: Array[String]) -> Result[Nil, String] {
 
   cfg.log_requests = !matches.contains?('quiet')
   cfg.log_timestamps = !matches.contains?('no-timestamps')
+  cfg.log_bad_bots = matches.contains?('log-bad-bots')
 
   http.start(cfg)
 }

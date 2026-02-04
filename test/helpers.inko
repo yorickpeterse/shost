@@ -160,8 +160,13 @@ fn pub get_port(child: mut ChildProcess) -> String {
 }
 
 fn pub send_request(uri: String) -> Bool {
+  send_request_with_agent(uri, 'shost-tests')
+}
+
+fn pub send_request_with_agent(uri: String, user_agent: String) -> Bool {
   let client = Client.new
 
+  client.user_agent = user_agent
   client.tls = ClientConfig.builder.with_certificate(certificate)
 
   let mut i = 0

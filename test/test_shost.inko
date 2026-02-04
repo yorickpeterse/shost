@@ -1,4 +1,4 @@
-import helpers (get_port, send_request)
+import helpers (get_port, send_request, send_request_with_agent)
 import shost
 import std.signal (Signal)
 import std.test (Tests)
@@ -107,6 +107,38 @@ fn pub tests(t: mut Tests) {
       t.true(child.wait.ok?)
       t.true(child.stdout.as_mut.get.read_all(out).ok?)
       t.true(out.to_string.starts_with?('127.0.0.1'))
+    },
+  )
+
+  t.fork(
+    'shost.run with logging of bad bots enabled',
+    child: fn {
+      shost.run(
+        [
+          '--port=0',
+          '--ip=127.0.0.1',
+          '--sites=fixtures/sites',
+          '--log-bad-bots',
+        ],
+      )
+    },
+    test: fn (t, p) {
+      let child = p.spawn_only.or_panic
+      let port = get_port(child)
+
+      t.true(
+        send_request_with_agent(
+          'http://localhost:${port}',
+          'Mozilla/5.0 (Whatever)',
+        ),
+      )
+
+      let out = ByteArray.new
+      let _ = child.signal(Signal.Quit)
+
+      t.true(child.wait.ok?)
+      t.true(child.stderr.as_mut.get.read_all(out).ok?)
+      t.true(out.to_string.contains?('headers'))
     },
   )
 }

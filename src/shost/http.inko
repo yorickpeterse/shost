@@ -1,5 +1,6 @@
 import shost.config (Config, Sites, Version)
 import std.bytes (Slice)
+import std.json (Json)
 import std.net.http (Header, Status)
 import std.net.http.server (
   Directory, Get, Handle, Head, Logger, Request, Response, Server,
@@ -21,6 +22,7 @@ fn new_logger(config: ref Config) -> Logger {
 }
 
 fn start(config: Config) -> Result[Nil, String] {
+  let debug = DebugWriter.new
   let sites = try config.sites.load
   let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
   let logger = new_logger(config)
@@ -30,10 +32,14 @@ fn start(config: Config) -> Result[Nil, String] {
   let tls = config.tls.some?
   let srv = {
     let ver = ver.clone
+    let log = config.log_bad_bots
 
     Server.new(fn move {
       recover {
+        let debug = if log { Option.Some(debug) } else { Option.None }
+
         Handler(
+          debug: debug,
           port: port,
           tls: tls,
           hosts: hosts,
@@ -57,7 +63,7 @@ fn start(config: Config) -> Result[Nil, String] {
           match config.load_tls {
             case Ok(Some(v)) -> tls = v
             case Ok(_) -> {}
-            case Error(e) -> Stderr.new.print(e.to_string)
+            case Error(e) -> debug.print(e.to_string)
           }
         }
 
@@ -70,11 +76,23 @@ fn start(config: Config) -> Result[Nil, String] {
   }
 
   Reloader().wait(recover ver.clone, hosts)
-  srv.before_start(fn (addr, _) { Stderr.new.print('listening on ${addr}') })
+  srv.before_start(fn (addr, _) { debug.print('listening on ${addr}') })
 
   match srv.start_ip(ip, port) {
     case Ok(_) -> Result.Ok(nil)
     case Error(e) -> Result.Error('the server failed: ${e}')
+  }
+}
+
+type async DebugWriter {
+  let @writer: Stderr
+
+  fn static new -> Self {
+    Self(writer: recover Stderr.new)
+  }
+
+  fn async mut print(message: String) {
+    @writer.print(message)
   }
 }
 
@@ -149,6 +167,7 @@ type inline Handler {
   # The configuration version this connection is using.
   let @version: Version
   let @logger: Logger
+  let @debug: Option[DebugWriter]
 
   fn mut reload_config {
     if @version.updated? {
@@ -194,23 +213,6 @@ type inline Handler {
       case _ -> return true
     }
 
-    # Real browsers these days send the Sec-Fetch-Site header, except for
-    # Firefox when reloading a page in reader mode. This check should hopefully
-    # catch clients pretending to be browsers when they're clearly not.
-    #
-    # Googlebot (and possibly other search crawlers) also starts its UA with
-    # "Mozilla" but doesn't pass these headers, but does include a URL. We allow
-    # such cases because at least the client gives us something to be identified
-    # with.
-    if
-      ua.starts_with?('Mozilla')
-        and !ua.contains?('://')
-        and request.headers.get(Header.sec_fetch_site).error?
-        and request.headers.get(Header.new('sec-gpc')).error?
-    {
-      return true
-    }
-
     # Some bad bots pretend to be a Let's Encrypt validation server while
     # sending request to random paths.
     if ua.contains?('letsencrypt') {
@@ -227,7 +229,65 @@ type inline Handler {
       case _ -> {}
     }
 
+    # Real browsers these days send the Sec-Fetch-Site header, except for
+    # Firefox when reloading a page in reader mode. This check should hopefully
+    # catch clients pretending to be browsers when they're clearly not.
+    #
+    # Googlebot (and possibly other search crawlers) also starts its UA with
+    # "Mozilla" but doesn't pass these headers, but does include a URL. We allow
+    # such cases because at least the client gives us something to be identified
+    # with.
+    if
+      ua.starts_with?('Mozilla')
+        and !ua.contains?('://')
+        and request.headers.get(Header.sec_fetch_site).error?
+        and request.headers.get(Header.new('sec-gpc')).error?
+        and request.headers.get(Header.new('sec-ch-ua')).error?
+    {
+      # Some clients use browser-like user agents but don't send the above
+      # headers. Two examples are Google PageSpeed and a variety of feed readers
+      # (e.g. News Explorer).
+      #
+      # To reduce the chance of flaggin legitimate clients as bad bots, we allow
+      # the request if they support Brotli. Most (obvious) bots seem to support
+      # Brotli while every real browser today does support it.
+      if request.accepted_encodings.any?(fn (v) { v.name.equals?('br') }) {
+        return false
+      }
+
+      return true
+    }
+
     false
+  }
+
+  fn log_bad_bot(request: ref Request) {
+    let Some(debug) = @debug else return
+    let (host, _) = request.host
+    let mut headers = Json.object
+
+    for key in request.headers.keys {
+      match request.headers.value(key) {
+        case Ok(Single(val)) -> headers = headers.string(key.to_string, val)
+        case Ok(Multiple(vals)) -> {
+          headers = headers.array(
+            key.to_string,
+            vals.iter.reduce(Json.array, fn (ary, val) { ary.string(val) }),
+          )
+        }
+        case _ -> next
+      }
+    }
+
+    let json = Json
+      .object
+      .string('address', request.address.to_string)
+      .string('host', host.to_string)
+      .string('uri', request.uri.to_string)
+      .object('headers', headers)
+      .into_string
+
+    debug.print(json)
   }
 }
 
@@ -242,7 +302,10 @@ impl Handle for Handler {
 
     # This is just a simple heuristic for blocking clients that are just
     # painfully obvious useless bots.
-    if bad_bot?(request) { return Response.forbidden.close }
+    if bad_bot?(request) {
+      log_bad_bot(request)
+      return Response.forbidden.close
+    }
 
     compress_response(request, static_file(request))
   }
