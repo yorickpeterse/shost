@@ -198,6 +198,7 @@ fn pub tests(t: mut Tests) {
     let res = req.send(srv)
 
     t.equal(res.status, Status.forbidden)
+    t.equal(res.headers.get(Header.connection), Result.Ok('close'))
   })
 
   t.test(

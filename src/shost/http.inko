@@ -242,7 +242,7 @@ impl Handle for Handler {
 
     # This is just a simple heuristic for blocking clients that are just
     # painfully obvious useless bots.
-    if bad_bot?(request) { return Response.forbidden }
+    if bad_bot?(request) { return Response.forbidden.close }
 
     compress_response(request, static_file(request))
   }
