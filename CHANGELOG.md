@@ -1,6 +1,12 @@
 <!-- This changelog is managed by https://github.com/yorickpeterse/clogs -->
 # Changelog
 
+## 0.5.0 (2026-03-08)
+
+### Added
+
+- [Tweak the bad bot heuristic and add bot logging](https://github.com/yorickpeterse/shost/commit/f9a67b57a4617a0be5ed866c510519aa7b60f983)
+
 ## 0.4.0 (2026-02-03)
 
 ### Added
