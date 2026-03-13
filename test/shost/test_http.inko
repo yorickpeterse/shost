@@ -1,20 +1,13 @@
 import helpers (fixtures, get_port, send_request)
-import shost.config (Config, Sites, Version)
-import shost.http (DebugWriter, Handler, Hosts, start)
-import std.io (Buffer)
-import std.json (Json)
+import shost.config (Config, LogFormat, Sites, Version)
+import shost.http (Handler, Hosts, start)
+import std.log (self, Handle as HandleLogs)
 import std.net.http (Header, Status)
 import std.net.http.server (Directory, Logger)
 import std.net.http.test (RequestBuilder)
 import std.signal (Signal)
-import std.sync (Promise)
+import std.sync (Channel)
 import std.test (Tests)
-
-impl DebugWriter {
-  fn async wait(promise: uni Promise[Nil]) {
-    promise.set(nil)
-  }
-}
 
 fn sites -> uni Sites {
   recover Sites(fixtures.join('sites'))
@@ -28,14 +21,30 @@ fn handler -> Handler {
   }
 
   Handler(
-    debug: Option.None,
     port: 80,
     tls: false,
     hosts: Hosts.new(path: sites, sites: recover map.clone),
     sites: map,
     version: Version.new,
-    logger: Logger.new.disabled,
+    log_bad_bots: false,
+    logger: Logger.new(log.Logger.null),
   )
+}
+
+type LogHandler {
+  let @channel: Channel[uni log.Event]
+
+  fn static new -> (uni HandleLogs, Channel[uni log.Event]) {
+    let chan = Channel.new
+
+    (recover Self(chan.clone) as HandleLogs, chan)
+  }
+}
+
+impl HandleLogs for LogHandler {
+  fn pub mut handle(event: uni log.Event) {
+    @channel.send(event)
+  }
 }
 
 fn pub tests(t: mut Tests) {
@@ -47,7 +56,7 @@ fn pub tests(t: mut Tests) {
       cfg.sites = fixtures.join('sites')
       cfg.tls = fixtures.join('tls')
       cfg.port = 0
-      cfg.log_requests = true
+      cfg.log_format = LogFormat.Json
       start(cfg)
     },
     test: fn (t, p) {
@@ -60,8 +69,12 @@ fn pub tests(t: mut Tests) {
       let _ = child.signal(Signal.Quit)
 
       t.true(child.wait.ok?)
-      t.true(child.stdout.as_mut.get.read_all(out).ok?)
-      t.true(out.to_string.contains?('GET /'))
+      t.true(child.stderr.as_mut.get.read_all(out).ok?)
+
+      let out = out.to_string
+
+      t.true(out.contains?('"method": "GET"'))
+      t.true(out.contains?('"path": "/"'))
     },
   )
 
@@ -75,7 +88,7 @@ fn pub tests(t: mut Tests) {
 
       cfg.sites = fixtures.join('sites')
       cfg.port = 0
-      cfg.log_requests = true
+      cfg.log_format = LogFormat.Json
       start(cfg)
     },
     test: fn (t, p) {
@@ -95,8 +108,12 @@ fn pub tests(t: mut Tests) {
       let _ = child.signal(Signal.Quit)
 
       t.true(child.wait.ok?)
-      t.true(child.stdout.as_mut.get.read_all(out).ok?)
-      t.true(out.to_string.contains?('GET /'))
+      t.true(child.stderr.as_mut.get.read_all(out).ok?)
+
+      let out = out.to_string
+
+      t.true(out.contains?('"method": "GET"'))
+      t.true(out.contains?('"path": "/"'))
     },
   )
 
@@ -211,9 +228,9 @@ fn pub tests(t: mut Tests) {
     t.equal(res.headers.get(Header.connection), Result.Ok('close'))
   })
 
-  t.fork(
+  t.ok(
     'Handler.handle with an invalid browser-like User-agent and bad bot logging enabled',
-    child: fn {
+    fn (t) {
       let map = Map.new
 
       map.set(
@@ -221,15 +238,15 @@ fn pub tests(t: mut Tests) {
         Directory.new(sites.path.join('example.com')),
       )
 
-      let debug = DebugWriter.new
+      let (log_handler, events) = LogHandler.new
       let srv = Handler(
-        debug: Option.Some(debug),
         port: 1234,
         tls: true,
         hosts: Hosts.new(path: sites, sites: recover map.clone),
         sites: map,
         version: Version.new,
-        logger: Logger.new.disabled,
+        logger: Logger.new(log.Logger.new(log_handler)),
+        log_bad_bots: true,
       )
 
       let req = RequestBuilder.get('/')
@@ -237,27 +254,52 @@ fn pub tests(t: mut Tests) {
       req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
 
       let _ = req.send(srv)
+      let { @fields = fields } = recover events.receive
 
-      await debug.wait
-    },
-    test: fn (t, p) {
-      let json = Json.parse(Buffer.new(p.spawn.stderr)).or_panic
+      t.true(
+        match fields.get('address') {
+          case Ok(String('192.0.2.0')) -> true
+          case _ -> false
+        },
+      )
+      t.true(
+        match fields.get('host') {
+          case Ok(String('localhost')) -> true
+          case _ -> false
+        },
+      )
+      t.true(
+        match fields.get('path') {
+          case Ok(String('/')) -> true
+          case _ -> false
+        },
+      )
 
-      t.equal(json.query.key('address').as_string, Option.Some('192.0.2.0:80'))
-      t.equal(json.query.key('host').as_string, Option.Some('localhost'))
-      t.equal(json.query.key('uri').as_string, Option.Some('/'))
-      t.equal(
-        json.query.key('headers').key('host').as_string,
-        Option.Some('localhost'),
+      let headers = match fields.remove('headers') {
+        case Ok(Group(m)) -> recover m
+        case _ -> throw 'the headers are missing'
+      }
+
+      t.true(
+        match headers.get('host') {
+          case Ok(String('localhost')) -> true
+          case _ -> false
+        },
       )
-      t.equal(
-        json.query.key('headers').key('user-agent').as_string,
-        Option.Some('Mozilla/5.0 (Whatever)'),
+      t.true(
+        match headers.get('user-agent') {
+          case Ok(String('Mozilla/5.0 (Whatever)')) -> true
+          case _ -> false
+        },
       )
-      t.equal(
-        json.query.key('headers').key('connection').as_string,
-        Option.Some('close'),
+      t.true(
+        match headers.get('connection') {
+          case Ok(String('close')) -> true
+          case _ -> false
+        },
       )
+
+      Result.Ok(nil)
     },
   )
 
@@ -448,13 +490,13 @@ fn pub tests(t: mut Tests) {
       )
 
       let srv = Handler(
-        debug: Option.None,
         port: 1234,
         tls: true,
         hosts: Hosts.new(path: sites, sites: recover map.clone),
         sites: map,
         version: Version.new,
-        logger: Logger.new.disabled,
+        logger: Logger.new(log.Logger.null),
+        log_bad_bots: false,
       )
 
       let req = RequestBuilder.get('/foo').query('key', 'value')

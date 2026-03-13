@@ -2,6 +2,7 @@ import std.crypto.pem
 import std.crypto.x509
 import std.fs.path (Path)
 import std.io (Buffer)
+import std.json (Json)
 import std.net.http.client (Client)
 import std.net.tls (ClientConfig)
 import std.process (sleep)
@@ -149,13 +150,14 @@ fn pub fixtures -> Path {
   'fixtures'.to_path.expand.or_panic
 }
 
-fn pub get_port(child: mut ChildProcess) -> String {
+fn pub get_port(child: mut ChildProcess) -> Int {
   let buf = ByteArray.new
-  let _ = child.stderr.as_mut.get.read(into: buf, size: 128)
+  let _ = child.stderr.as_mut.get.read(into: buf, size: 256)
+  let doc = Json.parse(Buffer.new(ref buf)).or_panic
 
-  match buf.to_slice.split_once(':') {
-    case Some((_, port)) -> port.trim.to_string
-    case _ -> panic('failed to determine the port')
+  match doc.query.key('fields').key('port').as_int {
+    case Some(v) -> v
+    case _ -> panic('failed to determine the port, output: ${buf}')
   }
 }
 

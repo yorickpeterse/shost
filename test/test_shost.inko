@@ -44,28 +44,8 @@ fn pub tests(t: mut Tests) {
   t.fork(
     'shost.run',
     child: fn {
-      shost.run(['--port=0', '--ip=127.0.0.1', '--sites=fixtures/sites'])
-    },
-    test: fn (t, p) {
-      let child = p.spawn_only.or_panic
-      let port = get_port(child)
-
-      t.true(send_request('http://localhost:${port}'))
-
-      let out = ByteArray.new
-      let _ = child.signal(Signal.Quit)
-
-      t.true(child.wait.ok?)
-      t.true(child.stdout.as_mut.get.read_all(out).ok?)
-      t.true(out.to_string.contains?('GET /'))
-    },
-  )
-
-  t.fork(
-    'shost.run without any logging',
-    child: fn {
       shost.run(
-        ['--port=0', '--ip=127.0.0.1', '--sites=fixtures/sites', '--quiet'],
+        ['--port=0', '--ip=127.0.0.1', '--sites=fixtures/sites', '--log=json'],
       )
     },
     test: fn (t, p) {
@@ -78,35 +58,12 @@ fn pub tests(t: mut Tests) {
       let _ = child.signal(Signal.Quit)
 
       t.true(child.wait.ok?)
-      t.equal(child.stdout.as_mut.get.read_all(out), Result.Ok(0))
-      t.true(out.empty?)
-    },
-  )
+      t.true(child.stderr.as_mut.get.read_all(out).ok?)
 
-  t.fork(
-    'shost.run without logging timestamps',
-    child: fn {
-      shost.run(
-        [
-          '--port=0',
-          '--ip=127.0.0.1',
-          '--sites=fixtures/sites',
-          '--no-timestamps',
-        ],
-      )
-    },
-    test: fn (t, p) {
-      let child = p.spawn_only.or_panic
-      let port = get_port(child)
+      let out = out.to_string
 
-      t.true(send_request('http://localhost:${port}'))
-
-      let out = ByteArray.new
-      let _ = child.signal(Signal.Quit)
-
-      t.true(child.wait.ok?)
-      t.true(child.stdout.as_mut.get.read_all(out).ok?)
-      t.true(out.to_string.starts_with?('127.0.0.1'))
+      t.true(out.contains?('"method": "GET"'))
+      t.true(out.contains?('"path": "/"'))
     },
   )
 
@@ -119,6 +76,7 @@ fn pub tests(t: mut Tests) {
           '--ip=127.0.0.1',
           '--sites=fixtures/sites',
           '--log-bad-bots',
+          '--log=json',
         ],
       )
     },

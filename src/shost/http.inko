@@ -1,51 +1,46 @@
 import shost.config (Config, Sites, Version)
 import std.bytes (Slice)
-import std.json (Json)
+import std.log
 import std.net.http (Header, Status)
 import std.net.http.server (
   Directory, Get, Handle, Head, Logger, Request, Response, Server,
   compress_response,
 )
 import std.signal (Signal)
-import std.stdio (Stderr)
 import std.sync (Promise)
 import std.uri (Host, Scheme)
 
-fn new_logger(config: ref Config) -> Logger {
-  if config.log_requests and config.log_timestamps {
-    Logger.new
-  } else if config.log_requests {
-    Logger.new.without_timestamps
-  } else {
-    Logger.new.disabled
+fn new_logger(config: ref Config) -> log.Logger {
+  match config.log_format {
+    case Text -> log.Logger.text
+    case Json -> log.Logger.json
+    case None -> log.Logger.null
   }
 }
 
 fn start(config: Config) -> Result[Nil, String] {
-  let debug = DebugWriter.new
   let sites = try config.sites.load
   let hosts = Hosts.new(recover config.sites.clone, recover sites.clone)
-  let logger = new_logger(config)
+  let log = new_logger(config)
+  let hlog = Logger.new(log.clone)
   let ver = Version.new
   let ip = config.ip
   let port = config.port
   let tls = config.tls.some?
   let srv = {
     let ver = ver.clone
-    let log = config.log_bad_bots
+    let log_bots = config.log_bad_bots
 
     Server.new(fn move {
       recover {
-        let debug = if log { Option.Some(debug) } else { Option.None }
-
         Handler(
-          debug: debug,
           port: port,
           tls: tls,
           hosts: hosts,
           sites: sites.clone,
           version: ver.clone,
-          logger: logger.clone,
+          logger: hlog.clone,
+          log_bad_bots: log_bots,
         )
       }
     })
@@ -55,6 +50,7 @@ fn start(config: Config) -> Result[Nil, String] {
     case Some(tls) -> {
       let mut tls = tls
       let ver = ver.clone
+      let log = log.clone
 
       srv.dynamic_tls(fn move (host) {
         if ver.updated? {
@@ -63,7 +59,9 @@ fn start(config: Config) -> Result[Nil, String] {
           match config.load_tls {
             case Ok(Some(v)) -> tls = v
             case Ok(_) -> {}
-            case Error(e) -> debug.print(e.to_string)
+            case Error(e) -> {
+              log.event('tls_reload_failed').with('message', e.to_string).submit
+            }
           }
         }
 
@@ -76,23 +74,22 @@ fn start(config: Config) -> Result[Nil, String] {
   }
 
   Reloader().wait(recover ver.clone, hosts)
-  srv.before_start(fn (addr, _) { debug.print('listening on ${addr}') })
+  srv.before_start(fn move (addr, _) {
+    let addr = match addr {
+      case Ip(v) -> v
+      case _ -> panic('only IP sockets are supported')
+    }
+
+    log
+      .event('started')
+      .with('ip', addr.ip.to_string)
+      .with('port', addr.port)
+      .submit
+  })
 
   match srv.start_ip(ip, port) {
     case Ok(_) -> Result.Ok(nil)
     case Error(e) -> Result.Error('the server failed: ${e}')
-  }
-}
-
-type async DebugWriter {
-  let @writer: Stderr
-
-  fn static new -> Self {
-    Self(writer: recover Stderr.new)
-  }
-
-  fn async mut print(message: String) {
-    @writer.print(message)
   }
 }
 
@@ -167,7 +164,7 @@ type inline Handler {
   # The configuration version this connection is using.
   let @version: Version
   let @logger: Logger
-  let @debug: Option[DebugWriter]
+  let @log_bad_bots: Bool
 
   fn mut reload_config {
     if @version.updated? {
@@ -261,38 +258,23 @@ type inline Handler {
     false
   }
 
-  fn log_bad_bot(request: ref Request) {
-    let Some(debug) = @debug else return
-    let (host, _) = request.host
-    let mut headers = Json.object
+  fn log_bad_bot(request: ref Request, event: mut log.EventBuilder) {
+    let mut headers = log.Group.new
 
-    for key in request.headers.keys {
-      match request.headers.value(key) {
-        case Ok(Single(val)) -> headers = headers.string(key.to_string, val)
-        case Ok(Multiple(vals)) -> {
-          headers = headers.array(
-            key.to_string,
-            vals.iter.reduce(Json.array, fn (ary, val) { ary.string(val) }),
-          )
+    for k in request.headers.keys {
+      match request.headers.value(k) {
+        case Ok(Single(v)) -> headers = headers.with(k.to_string, v)
+        case Ok(Multiple(v)) -> {
+          headers = headers.with(k.to_string, String.join(v.iter, ', '))
         }
         case _ -> next
       }
     }
 
-    let json = Json
-      .object
-      .string('address', request.address.to_string)
-      .string('host', host.to_string)
-      .string('uri', request.uri.to_string)
-      .object('headers', headers)
-      .into_string
-
-    debug.print(json)
+    event.add_group('headers', headers)
   }
-}
 
-impl Handle for Handler {
-  fn pub mut handle(request: mut Request) -> Response {
+  fn mut route(request: mut Request, event: mut log.EventBuilder) -> Response {
     reload_config
 
     match request.method {
@@ -303,15 +285,21 @@ impl Handle for Handler {
     # This is just a simple heuristic for blocking clients that are just
     # painfully obvious useless bots.
     if bad_bot?(request) {
-      log_bad_bot(request)
+      if @log_bad_bots { log_bad_bot(request, event) }
+
       return Response.forbidden.close
     }
 
     compress_response(request, static_file(request))
   }
+}
 
-  fn pub mut response(request: mut Request, response: Response) -> Response {
-    @logger.log(request, response)
-    response
+impl Handle for Handler {
+  fn pub mut handle(request: mut Request) -> Response {
+    let event = @logger.prepare(request)
+    let resp = route(request, event)
+
+    @logger.submit(event, resp)
+    resp
   }
 }

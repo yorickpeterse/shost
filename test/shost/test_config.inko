@@ -83,7 +83,6 @@ fn pub tests(t: mut Tests) {
     t.equal(cfg.ip, IpAddress.v4(0, 0, 0, 0))
     t.equal(cfg.port, PORT)
     t.equal(cfg.tls, Option.None)
-    t.true(cfg.log_timestamps)
   })
 
   t.test('Config.sites=', fn (t) {
@@ -100,6 +99,39 @@ fn pub tests(t: mut Tests) {
 
     t.equal(cfg.tls, Option.Some('test'.to_path))
     t.equal(cfg.port, TLS_PORT)
+  })
+
+  t.test('Config.parse_log_format', fn (t) {
+    let cfg = Config.new
+
+    t.equal(cfg.parse_log_format('text'), Result.Ok(nil))
+    t.true(
+      match cfg.log_format {
+        case Text -> true
+        case _ -> false
+      },
+    )
+
+    t.equal(cfg.parse_log_format('json'), Result.Ok(nil))
+    t.true(
+      match cfg.log_format {
+        case Json -> true
+        case _ -> false
+      },
+    )
+
+    t.equal(cfg.parse_log_format('none'), Result.Ok(nil))
+    t.true(
+      match cfg.log_format {
+        case None -> true
+        case _ -> false
+      },
+    )
+
+    t.equal(
+      cfg.parse_log_format('foo'),
+      Result.Error("the log format 'foo' is invalid"),
+    )
   })
 
   t.test('Config.parse_ip', fn (t) {

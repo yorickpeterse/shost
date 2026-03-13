@@ -22,6 +22,12 @@ let pub PORT = 80
 # This constant is public such that it may be adjusted at compile-time.
 let pub TLS_PORT = 443
 
+type copy enum LogFormat {
+  case None
+  case Text
+  case Json
+}
+
 # A type that tracks the global and local configuration versions.
 #
 # To handle configuration reloads we track a global version number that is
@@ -111,11 +117,8 @@ type Config {
   # The port number to use.
   let mut @port: Int
 
-  # If timestamps should be included in log entries.
-  let mut @log_timestamps: Bool
-
-  # If request logging should be enabled or not.
-  let mut @log_requests: Bool
+  # The format to use for logging events.
+  let mut @log_format: LogFormat
 
   # If requests from bad bots should be logged or not.
   let mut @log_bad_bots: Bool
@@ -126,8 +129,7 @@ type Config {
       ip: IpAddress.v4(0, 0, 0, 0),
       port: PORT,
       tls: Option.None,
-      log_timestamps: true,
-      log_requests: true,
+      log_format: LogFormat.Text,
       log_bad_bots: false,
     )
   }
@@ -139,6 +141,17 @@ type Config {
   fn mut tls=(value: Path) {
     @tls = Option.Some(value)
     @port = TLS_PORT
+  }
+
+  fn mut parse_log_format(value: String) -> Result[Nil, String] {
+    @log_format = match value {
+      case 'text' -> LogFormat.Text
+      case 'json' -> LogFormat.Json
+      case 'none' -> LogFormat.None
+      case _ -> throw "the log format '${value}' is invalid"
+    }
+
+    Result.Ok(nil)
   }
 
   fn mut parse_ip(ip: String) -> Result[Nil, String] {

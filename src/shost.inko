@@ -36,9 +36,8 @@ fn run(arguments: Array[String]) -> Result[Nil, String] {
   opts.single('t', 'tls', 'DIR', 'The directory containing TLS configuration')
   opts.single('p', 'port', 'PORT', 'The port to listen on')
   opts.single('i', 'ip', 'IP', 'The IP to bind to')
-  opts.flag('q', 'quiet', 'Disables logging of requests')
-  opts.flag('', 'no-timestamps', "Don't add timestamps to log entries")
-  opts.flag('', 'log-bad-bots', 'Log to STDERR for bad bot requests')
+  opts.single('', 'log', 'text|json|none', 'The logging format to use')
+  opts.flag('', 'log-bad-bots', 'Log extra request data for bad bots')
   opts.flag('v', 'version', 'Show the version')
 
   let matches = try opts.parse(arguments).map_error(fn (e) { e.to_string })
@@ -75,8 +74,11 @@ fn run(arguments: Array[String]) -> Result[Nil, String] {
     case _ -> {}
   }
 
-  cfg.log_requests = !matches.contains?('quiet')
-  cfg.log_timestamps = !matches.contains?('no-timestamps')
+  match matches.value('log') {
+    case Some(v) -> try cfg.parse_log_format(v)
+    case _ -> {}
+  }
+
   cfg.log_bad_bots = matches.contains?('log-bad-bots')
 
   http.start(cfg)
