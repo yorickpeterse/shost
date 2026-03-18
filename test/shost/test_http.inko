@@ -512,4 +512,43 @@ fn pub tests(t: mut Tests) {
       )
     },
   )
+
+  t.test(
+    "Handler.handle with TLS disabled doesn't sets the Strict-Transport-Security header",
+    fn (t) {
+      let srv = handler
+      let res = RequestBuilder.post('/').send(srv)
+
+      t.true(res.headers.get(Header.strict_transport_security).error?)
+    },
+  )
+
+  t.test(
+    'Handler.handle with TLS enabled sets the Strict-Transport-Security header',
+    fn (t) {
+      let map = Map.new
+
+      map.set(
+        'example.com'.to_slice,
+        Directory.new(sites.path.join('example.com')),
+      )
+
+      let srv = Handler(
+        port: 1234,
+        tls: true,
+        hosts: Hosts.new(path: sites, sites: recover map.clone),
+        sites: map,
+        version: Version.new,
+        logger: Logger.new(log.Logger.null),
+        log_bad_bots: false,
+      )
+
+      let res = RequestBuilder.get('/').send(srv)
+
+      t.equal(
+        res.headers.get(Header.strict_transport_security),
+        Result.Ok('max-age=31536000; includeSubDomains; preload'),
+      )
+    },
+  )
 }

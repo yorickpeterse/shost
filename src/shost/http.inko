@@ -299,6 +299,13 @@ impl Handle for Handler {
     let event = @logger.prepare(request)
     let resp = route(request, event)
 
+    if @tls {
+      resp.headers.set(
+        Header.strict_transport_security,
+        'max-age=31536000; includeSubDomains; preload',
+      )
+    }
+
     @logger.submit(event, resp)
     resp
   }
