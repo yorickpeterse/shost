@@ -1,6 +1,17 @@
 <!-- This changelog is managed by https://github.com/yorickpeterse/clogs -->
 # Changelog
 
+## 0.6.0 (2026-04-20)
+
+### Added
+
+- [Set the Strict-Transport-Security header for TLS](https://github.com/yorickpeterse/shost/commit/e5cc5bbc0948e2dd5f14b4abbe9681c071ad4f91)
+
+### Changed
+
+- [Build the container using jemalloc](https://github.com/yorickpeterse/shost/commit/8bcd71d0c07761f807f05da242b7a9a35abc6e69)
+- [Use the new logging setup from Inko main](https://github.com/yorickpeterse/shost/commit/fabae12bdfd7d01164b30e295b641c1c5c45e02e)
+
 ## 0.5.0 (2026-03-08)
 
 ### Added
