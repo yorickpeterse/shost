@@ -245,9 +245,9 @@ type inline Handler {
       # headers. Two examples are Google PageSpeed and a variety of feed readers
       # (e.g. News Explorer).
       #
-      # To reduce the chance of flaggin legitimate clients as bad bots, we allow
-      # the request if they support Brotli. Most (obvious) bots seem to support
-      # Brotli while every real browser today does support it.
+      # To reduce the chance of flagging legitimate clients as bad bots, we
+      # allow the request if they support Brotli. Most (obvious) bots seem to
+      # not support Brotli while every real browser today does support it.
       if request.accepted_encodings.any?(fn (v) { v.name.equals?('br') }) {
         return false
       }
