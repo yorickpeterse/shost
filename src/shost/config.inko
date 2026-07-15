@@ -1,7 +1,6 @@
 import std.bytes (Slice)
 import std.clone (Clone)
 import std.fs.path (Path)
-import std.int (Format)
 import std.net.http.server (Directory)
 import std.net.ip (IpAddress)
 import std.net.tls (ServerConfig)
@@ -162,7 +161,7 @@ type Config {
   }
 
   fn mut parse_port(port: String) -> Result[Nil, String] {
-    let Some(v) = Int.parse(port, Format.Decimal) else {
+    let Some(v) = Int.parse(port, base: 10) else {
       throw "the port '${port}' is invalid"
     }
 
