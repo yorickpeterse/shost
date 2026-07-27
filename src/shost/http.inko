@@ -1,4 +1,4 @@
-import shost.config (Config, Sites, Version)
+import shost.config (Config, Sites, Tls, Version)
 import std.bytes (Slice)
 import std.log
 import std.net.http (Header, Status)
@@ -6,6 +6,7 @@ import std.net.http.server (
   Directory, Get, Handle, Head, Logger, Request, Response, Server,
   compress_response,
 )
+import std.net.tls
 import std.signal (Signal)
 import std.sync (Promise)
 import std.uri (Host, Scheme)
@@ -26,7 +27,8 @@ fn start(config: Config) -> Result[Nil, String] {
   let ver = Version.new
   let ip = config.ip
   let port = config.port
-  let tls = config.tls.some?
+  let tls_conf = try config.load_tls
+  let tls = tls_conf.some?
   let srv = {
     let ver = ver.clone
     let log_bots = config.log_bad_bots
@@ -35,7 +37,7 @@ fn start(config: Config) -> Result[Nil, String] {
       recover {
         Handler(
           port: port,
-          tls: tls,
+          tls: recover tls_conf.clone,
           hosts: hosts,
           sites: sites.clone,
           version: ver.clone,
@@ -46,33 +48,7 @@ fn start(config: Config) -> Result[Nil, String] {
     })
   }
 
-  match try config.load_tls {
-    case Some(tls) -> {
-      let mut tls = tls
-      let ver = ver.clone
-      let log = log.clone
-
-      srv.dynamic_tls(fn move (host) {
-        if ver.updated? {
-          # If reloading the TLS configuration fails we'll keep using the
-          # existing so we don't just start dropping connections.
-          match config.load_tls {
-            case Ok(Some(v)) -> tls = v
-            case Ok(_) -> {}
-            case Error(e) -> {
-              log.event('tls_reload_failed').with('message', e.to_string).submit
-            }
-          }
-        }
-
-        let Some(host) = host else return Option.None
-
-        tls.get(host).ok
-      })
-    }
-    case _ -> {}
-  }
-
+  srv.tls = tls
   Reloader().wait(recover ver.clone, hosts)
   srv.before_start(fn move (addr, _) {
     let addr = match addr {
@@ -154,8 +130,8 @@ type inline Handler {
   # The port we're listening on.
   let @port: Int
 
-  # If TLS is used or not.
-  let @tls: Bool
+  # The optional TLS configuration.
+  let @tls: Option[Tls]
 
   # The mapping of hostnames to a `Directory` used to serve corresponding
   # requests.
@@ -197,7 +173,9 @@ type inline Handler {
     let uri = request.uri.clone
 
     uri.host = Host.new(non_www)
-    uri.scheme = Option.Some(if @tls { Scheme.Https } else { Scheme.Http })
+    uri.scheme = Option.Some(
+      if @tls.some? { Scheme.Https } else { Scheme.Http },
+    )
     uri.port = Option.Some(@port)
     Response.new.status(Status.new(301)).header(Header.location, uri.to_string)
   }
@@ -295,11 +273,33 @@ type inline Handler {
 }
 
 impl Handle for Handler {
+  fn pub mut configure_tls(name: Option[String]) -> Option[tls.ServerConfig] {
+    let Some(tls) = @tls else return Option.None
+    let Some(name) = name else return Option.None
+
+    if @version.updated? {
+      # If reloading the TLS configuration fails we'll keep using the existing
+      # so we don't just start dropping connections.
+      match tls.reload {
+        case Ok(_) -> {}
+        case Error(e) -> {
+          @logger
+            .logger
+            .event('tls_reload_failed')
+            .with('message', e.to_string)
+            .submit
+        }
+      }
+    }
+
+    tls.map.get(name).ok
+  }
+
   fn pub mut handle(request: mut Request) -> Response {
     let event = @logger.prepare(request)
     let resp = route(request, event)
 
-    if @tls {
+    if @tls.some? {
       resp.headers.set(
         Header.strict_transport_security,
         'max-age=31536000; includeSubDomains; preload',

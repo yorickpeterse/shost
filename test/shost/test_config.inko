@@ -1,5 +1,5 @@
 import helpers (fixtures)
-import shost.config (Config, PORT, SITES, Sites, TLS_PORT, Version)
+import shost.config (Config, PORT, SITES, Sites, TLS_PORT, Tls, Version)
 import std.net.ip (IpAddress)
 import std.test (Tests)
 
@@ -161,7 +161,7 @@ fn pub tests(t: mut Tests) {
     let cfg = config
     let Ok(Some(tls)) = cfg.load_tls else throw 'failed to load TLS'
 
-    t.true(tls.get('localhost').ok?)
+    t.true(tls.map.get('localhost').ok?)
     Result.Ok(nil)
   })
 
@@ -188,7 +188,22 @@ fn pub tests(t: mut Tests) {
 
     let Ok(Some(tls)) = cfg.load_tls else throw 'failed to load TLS'
 
-    t.true(tls.empty?)
+    t.true(tls.map.empty?)
     Result.Ok(nil)
+  })
+
+  t.test('Tls.reload', fn (t) {
+    let tls1 = Tls.new(fixtures.join('tls'))
+
+    t.equal(tls1.reload, Result.Ok(nil))
+    t.equal(tls1.map.size, 1)
+
+    let tls2 = Tls(
+      path: fixtures.join('invalid-tls-directory'),
+      map: tls1.map.clone,
+    )
+
+    t.true(tls2.reload.error?)
+    t.equal(tls2.map.size, tls1.map.size)
   })
 }

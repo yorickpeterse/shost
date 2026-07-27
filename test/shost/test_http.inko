@@ -1,5 +1,5 @@
 import helpers (fixtures, get_port, send_request)
-import shost.config (Config, LogFormat, Sites, Version)
+import shost.config (Config, LogFormat, Sites, Tls, Version)
 import shost.http (Handler, Hosts, start)
 import std.log (self, Handle as HandleLogs)
 import std.net.http (Header, Status)
@@ -22,7 +22,7 @@ fn handler -> Handler {
 
   Handler(
     port: 80,
-    tls: false,
+    tls: Option.None,
     hosts: Hosts.new(path: sites, sites: recover map.clone),
     sites: map,
     version: Version.new,
@@ -241,7 +241,7 @@ fn pub tests(t: mut Tests) {
       let (log_handler, events) = LogHandler.new
       let srv = Handler(
         port: 1234,
-        tls: true,
+        tls: Option.Some(Tls.new(fixtures.join('tls'))),
         hosts: Hosts.new(path: sites, sites: recover map.clone),
         sites: map,
         version: Version.new,
@@ -491,7 +491,7 @@ fn pub tests(t: mut Tests) {
 
       let srv = Handler(
         port: 1234,
-        tls: true,
+        tls: Option.Some(Tls.new(fixtures.join('tls'))),
         hosts: Hosts.new(path: sites, sites: recover map.clone),
         sites: map,
         version: Version.new,
@@ -535,7 +535,7 @@ fn pub tests(t: mut Tests) {
 
       let srv = Handler(
         port: 1234,
-        tls: true,
+        tls: Option.Some(Tls.new(fixtures.join('tls'))),
         hosts: Hosts.new(path: sites, sites: recover map.clone),
         sites: map,
         version: Version.new,

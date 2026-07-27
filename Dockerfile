@@ -4,7 +4,7 @@ WORKDIR /work
 RUN microdnf install --assumeyes jemalloc-devel
 RUN inko build --release --linker-arg '-ljemalloc'
 
-FROM ghcr.io/inko-lang/inko:main
+FROM registry.fedoraproject.org/fedora-minimal:44
 RUN microdnf install --assumeyes jemalloc-devel
 COPY --from=builder ["/work/build/release/shost", "/usr/bin/shost"]
 CMD ["/usr/bin/shost"]

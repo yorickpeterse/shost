@@ -169,12 +169,32 @@ type Config {
     Result.Ok(nil)
   }
 
-  fn load_tls -> Result[Option[Map[String, ServerConfig]], String] {
-    let Some(dir) = @tls else return Result.Ok(Option.None)
-    let map = Map.new
-    let iter = try dir.list.map_error(fn (e) {
-      'failed to list the sites in ${dir}: ${e}'
+  fn load_tls -> Result[Option[Tls], String] {
+    match @tls {
+      case Some(v) -> {
+        let tls = Tls.new(v.clone)
+
+        try tls.reload
+        Result.Ok(Option.Some(tls))
+      }
+      case _ -> Result.Ok(Option.None)
+    }
+  }
+}
+
+type inline Tls {
+  let @path: Path
+  let @map: Map[String, ServerConfig]
+
+  fn static new(path: Path) -> Self {
+    Self(path: path, map: Map.new)
+  }
+
+  fn mut reload -> Result[Nil, String] {
+    let iter = try @path.list.map_error(fn (e) {
+      'failed to list the sites in ${@path}: ${e}'
     })
+    let map = Map.new
 
     for entry in iter {
       let Ok({ @path = path, @type = Directory }) = entry else next
@@ -191,6 +211,16 @@ type Config {
       map.set(path.tail.to_string, conf)
     }
 
-    Result.Ok(Option.Some(map))
+    # Don't clear until this point such that if we fail to reload the TLS data
+    # we don't throw away the old data that may still be perfectly valid.
+    @map.clear
+    @map.merge(map)
+    Result.Ok(nil)
+  }
+}
+
+impl Clone for Tls {
+  fn pub clone -> Self {
+    Self(path: @path.clone, map: @map.clone)
   }
 }
