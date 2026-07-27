@@ -47,8 +47,7 @@ To build from source:
 inko build --release
 ```
 
-For packaging purposes there's also a `Makefile` providing tasks such as `make`
-and `make install`.
+The resulting executable is now located in `./build/release/shost`.
 
 There's also a container you can use:
 
