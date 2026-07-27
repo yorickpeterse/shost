@@ -1,6 +1,12 @@
 <!-- This changelog is managed by https://github.com/yorickpeterse/clogs -->
 # Changelog
 
+## 0.7.0 (2026-07-27)
+
+### Changed
+
+- [Update TLS setup for Inko main](https://github.com/yorickpeterse/shost/commit/1ff883b21d7713e06937d038bd9e281c8cfef047)
+
 ## 0.6.0 (2026-04-20)
 
 ### Added
