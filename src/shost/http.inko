@@ -230,6 +230,15 @@ type inline Handler {
         return false
       }
 
+      # Feed readers tend to use browser-like user agents so they can access
+      # feeds that would otherwise block them. The user of such a feed reader
+      # rarely (never?) has the ability to change the user agent. To accomodate
+      # such feed readers we _do_ allow them access to the Atom/RSS feed.
+      match request.target {
+        case ['feed.xml'] -> return false
+        case _ -> {}
+      }
+
       return true
     }
 

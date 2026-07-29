@@ -429,6 +429,17 @@ fn pub tests(t: mut Tests) {
     t.equal(res.status, Status.forbidden)
   })
 
+  t.test(
+    'Handler.handle with an otherwise bad bot that requests an Atom feed',
+    fn (t) {
+      let srv = handler
+      let req = RequestBuilder.get('/feed.xml')
+
+      req.headers.set(Header.user_agent, 'Mozilla/5.0 (Whatever)')
+      t.equal(req.send(srv).status, Status.ok)
+    },
+  )
+
   t.test('Handler.handle when the configuration needs to be reloaded', fn (t) {
     let srv = handler
     let _ = srv.sites.remove('example.com'.to_slice)
