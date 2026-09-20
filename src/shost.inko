@@ -2,6 +2,7 @@ import shost.config (Config)
 import shost.http
 import std.env
 import std.optparse (Options)
+import std.sandbox (Sandbox, bind, read)
 import std.stdio (Stderr, Stdout)
 import std.string (ToString)
 import std.sys (exit)
@@ -23,6 +24,19 @@ fn error(value: String) -> Never {
   )
 
   exit(1)
+}
+
+fn enable_sandbox(config: ref Config) {
+  let s = Sandbox.new
+
+  match config.tls {
+    case Some(v) -> s.path(v, read)
+    case _ -> {}
+  }
+
+  s.path(config.sites.path, read)
+  s.tcp(config.port, bind)
+  s.enable
 }
 
 fn run(arguments: Array[String]) -> Result[Nil, String] {
@@ -81,6 +95,7 @@ fn run(arguments: Array[String]) -> Result[Nil, String] {
 
   cfg.log_bad_bots = matches.contains?('log-bad-bots')
 
+  enable_sandbox(cfg)
   http.start(cfg)
 }
 

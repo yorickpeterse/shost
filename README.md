@@ -26,6 +26,8 @@ There are plenty of capable HTTP servers such as [nginx](https://nginx.org/),
 - Some simple heuristics for blocking bots that pretend to be browsers or try to
   scan for exploits
 - No garbage collector ruining the fun by introducing non-deterministic behavior
+- The server is sandboxed using the OS' sandboxing primitives (if any), such as
+  Landlock on Linux and Seatbelt on macOS
 
 ## Anti-features
 
