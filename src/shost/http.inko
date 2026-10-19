@@ -69,6 +69,77 @@ fn start(config: Config) -> Result[Nil, String] {
   }
 }
 
+fn missing_headers?(request: ref Request) -> Bool {
+  if request.headers.get(Header.accept_language).error? { return true }
+
+  request.headers.get(Header.sec_fetch_site).error?
+    and request.headers.get(Header.new('sec-gpc')).error?
+    and request.headers.get(Header.new('sec-ch-ua')).error?
+}
+
+fn bad_bot?(request: ref Request) -> Bool {
+  # If a client can't be bothered identifying themselves, they're almost
+  # certainly a bad bot.
+  let ua = match request.headers.get(Header.user_agent) {
+    case Ok(v) if v.size > 0 -> v
+    case _ -> return true
+  }
+
+  # Some bad bots pretend to be a Let's Encrypt validation server while sending
+  # request to random paths.
+  if ua.contains?('letsencrypt') {
+    match request.target {
+      case ['.well-known', 'acme-challenge', _] -> return false
+      case _ -> return true
+    }
+  }
+
+  # We're serving static files and not PHP scripts, so clients requesting those
+  # are likely bots scanning for vulnerabilities.
+  match request.target.last {
+    case Some(v) if v.ends_with?('.php') -> return true
+    case _ -> {}
+  }
+
+  # Real browsers these days send the Sec-Fetch-Site header, except for Firefox
+  # when reloading a page in reader mode. This check should hopefully catch
+  # clients pretending to be browsers when they're clearly not.
+  #
+  # Googlebot (and possibly other search crawlers) also starts its UA with
+  # "Mozilla" but doesn't pass these headers, but does include a URL. We allow
+  # such cases because at least the client gives us something to be identified
+  # with.
+  if
+    ua.starts_with?('Mozilla')
+      and !ua.contains?('://')
+      and missing_headers?(request)
+  {
+    # Some clients use browser-like user agents but don't send the above
+    # headers. Two examples are Google PageSpeed and a variety of feed readers
+    # (e.g. News Explorer).
+    #
+    # To reduce the chance of flagging legitimate clients as bad bots, we allow
+    # the request if they support Brotli. Most (obvious) bots seem to not
+    # support Brotli while every real browser today does support it.
+    if request.accepted_encodings.any?(fn (v) { v.name.equals?('br') }) {
+      return false
+    }
+
+    # Feed readers tend to use browser-like user agents so they can access feeds
+    # that would otherwise block them. The user of such a feed reader rarely
+    # (never?) has the ability to change the user agent. To accomodate such feed
+    # readers we _do_ allow them access to the Atom/RSS feed.
+    match request.target {
+      case ['feed.xml'] -> return false
+      case _ -> {}
+    }
+
+    return true
+  }
+
+  false
+}
+
 # A process used for reloading the hosts configuration and propagating it across
 # active connections.
 #
@@ -178,71 +249,6 @@ type inline Handler {
     )
     uri.port = Option.Some(@port)
     Response.new.status(Status.new(301)).header(Header.location, uri.to_string)
-  }
-
-  fn bad_bot?(request: ref Request) -> Bool {
-    # If a client can't be bothered identifying themselves, they're almost
-    # certainly a bad bot.
-    let ua = match request.headers.get(Header.user_agent) {
-      case Ok(v) if v.size > 0 -> v
-      case _ -> return true
-    }
-
-    # Some bad bots pretend to be a Let's Encrypt validation server while
-    # sending request to random paths.
-    if ua.contains?('letsencrypt') {
-      match request.target {
-        case ['.well-known', 'acme-challenge', _] -> return false
-        case _ -> return true
-      }
-    }
-
-    # We're serving static files and not PHP scripts, so clients requesting
-    # those are likely bots scanning for vulnerabilities.
-    match request.target.last {
-      case Some(v) if v.ends_with?('.php') -> return true
-      case _ -> {}
-    }
-
-    # Real browsers these days send the Sec-Fetch-Site header, except for
-    # Firefox when reloading a page in reader mode. This check should hopefully
-    # catch clients pretending to be browsers when they're clearly not.
-    #
-    # Googlebot (and possibly other search crawlers) also starts its UA with
-    # "Mozilla" but doesn't pass these headers, but does include a URL. We allow
-    # such cases because at least the client gives us something to be identified
-    # with.
-    if
-      ua.starts_with?('Mozilla')
-        and !ua.contains?('://')
-        and request.headers.get(Header.sec_fetch_site).error?
-        and request.headers.get(Header.new('sec-gpc')).error?
-        and request.headers.get(Header.new('sec-ch-ua')).error?
-    {
-      # Some clients use browser-like user agents but don't send the above
-      # headers. Two examples are Google PageSpeed and a variety of feed readers
-      # (e.g. News Explorer).
-      #
-      # To reduce the chance of flagging legitimate clients as bad bots, we
-      # allow the request if they support Brotli. Most (obvious) bots seem to
-      # not support Brotli while every real browser today does support it.
-      if request.accepted_encodings.any?(fn (v) { v.name.equals?('br') }) {
-        return false
-      }
-
-      # Feed readers tend to use browser-like user agents so they can access
-      # feeds that would otherwise block them. The user of such a feed reader
-      # rarely (never?) has the ability to change the user agent. To accomodate
-      # such feed readers we _do_ allow them access to the Atom/RSS feed.
-      match request.target {
-        case ['feed.xml'] -> return false
-        case _ -> {}
-      }
-
-      return true
-    }
-
-    false
   }
 
   fn log_bad_bot(request: ref Request, event: mut log.EventBuilder) {
